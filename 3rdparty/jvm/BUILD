@@ -1,3 +1,8 @@
+# JavaCP
+jar_library(name='javacv', jars=[
+  jar(org='org.bytedeco', name='javacv-platform', rev='1.3.1')
+])
+
 # JUnit
 jar_library(name='junit', jars=[
   jar(org='junit', name='junit', rev='4.12'),
