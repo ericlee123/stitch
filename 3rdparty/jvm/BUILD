@@ -1,6 +1,7 @@
-# JavaCP
-jar_library(name='javacv', jars=[
-  jar(org='org.bytedeco', name='javacv-platform', rev='1.3.1')
+# BoofCv
+jar_library(name='boofcv', jars=[
+  jar(org='org.boofcv', name='all', rev='0.26')
+
 ])
 
 # JUnit
