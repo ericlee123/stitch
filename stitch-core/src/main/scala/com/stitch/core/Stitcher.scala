@@ -31,40 +31,55 @@ object Stitcher {
   def main(args: Array[String]): Unit = {
     // Setup the interest point descriptor, associator, and matcher.
     val descriptor = FactoryDetectDescribe.surfStable(
-      new ConfigFastHessian(1, 2, 200, 1, 9, 4, 4), null,null, classOf[GrayF32]
+        new ConfigFastHessian(1, 2, 200, 1, 9, 4, 4),
+        null,
+        null,
+        classOf[GrayF32]
     )
 
     val associator = FactoryAssociation.greedy(
-      FactoryAssociation.scoreEuclidean(classOf[BrightFeature], true), 2, true
+        FactoryAssociation.scoreEuclidean(classOf[BrightFeature], true),
+        2,
+        true
     )
 
-    val matcher = FactoryMultiViewRobust.homographyRansac(null, new ConfigRansac(60, 3))
+    val matcher =
+      FactoryMultiViewRobust.homographyRansac(null, new ConfigRansac(60, 3))
 
     // Stitch together images.
-    ShowImages.showWindow(stitch(descriptor, associator, matcher)(
-      ImageIO.read(new File("stitch-assets/kayak_01.jpg")),
-      ImageIO.read(new File("stitch-assets/kayak_02.jpg")),
-      1.0
+    val twoPiece = stitch(descriptor, associator, matcher)(
+        ImageIO.read(new File("stitch-assets/living-room-0.jpg")),
+        ImageIO.read(new File("stitch-assets/living-room-1.jpg")),
+        1.0
+    )
 
-    ), "Stitched Images", true)
+    ShowImages.showWindow(twoPiece, "Stitched Images", true)
+
+    print(twoPiece.getHeight() + " " + twoPiece.getWidth())
+
+    val tpFile = new File("two-piece.png")
+    ImageIO.write(twoPiece, "png", tpFile)
+//    val threePiece = stitch(descriptor, associator, matcher)(
+//      twoPiece
+//    )
   }
 
   /**
-   *
-   * @param inputA
-   * @param inputB
-   * @param descriptor
-   * @param associator
-   * @param matcher
-   * @return
-   */
+    *
+    * @param inputA
+    * @param inputB
+    * @param descriptor
+    * @param associator
+    * @param matcher
+    * @return
+    */
   def homography(
-    descriptor: DetectDescribePoint[GrayF32, BrightFeature],
-    associator: AssociateDescription[BrightFeature],
-    matcher: ModelMatcher[Homography2D_F64, AssociatedPair]
+      descriptor: DetectDescribePoint[GrayF32, BrightFeature],
+      associator: AssociateDescription[BrightFeature],
+      matcher: ModelMatcher[Homography2D_F64, AssociatedPair]
   )(
-    inputA: GrayF32,
-    inputB: GrayF32
+      inputA: GrayF32,
+      inputB: GrayF32
   ): Homography2D_F64 = {
     // Locate a matching between the interest points of the images.
     val (pointsA, descA) = describe(descriptor)(inputA)
@@ -78,22 +93,22 @@ object Stitcher {
     }
 
     // Attempt to construct the homography.
-    if(!matcher.process(pairs.asJava))
+    if (!matcher.process(pairs.asJava))
       throw new RuntimeException("Unable to determine homography.")
     else
       matcher.getModelParameters.copy()
   }
 
   /**
-   *
-   * @param detector
-   * @param input
-   * @return
-   */
+    *
+    * @param detector
+    * @param input
+    * @return
+    */
   def describe(
-    detector: DetectDescribePoint[GrayF32, BrightFeature]
+      detector: DetectDescribePoint[GrayF32, BrightFeature]
   )(
-    input: GrayF32
+      input: GrayF32
   ): (Seq[Point2D_F64], FastQueue[BrightFeature]) = {
     val points = mutable.Buffer.empty[Point2D_F64]
     val descriptors = UtilFeature.createQueue(detector, 100)
@@ -108,16 +123,16 @@ object Stitcher {
   }
 
   /**
-   *
-   * @param descriptorsA
-   * @param descriptorsB
-   * @return
-   */
+    *
+    * @param descriptorsA
+    * @param descriptorsB
+    * @return
+    */
   def matching(
-    associator: AssociateDescription[BrightFeature]
+      associator: AssociateDescription[BrightFeature]
   )(
-    descriptorsA: FastQueue[BrightFeature],
-    descriptorsB: FastQueue[BrightFeature]
+      descriptorsA: FastQueue[BrightFeature],
+      descriptorsB: FastQueue[BrightFeature]
   ): FastQueue[AssociatedIndex] = {
     associator.setSource(descriptorsA)
     associator.setDestination(descriptorsB)
@@ -126,36 +141,48 @@ object Stitcher {
   }
 
   /**
-   *
-   * http://boofcv.org/index.php?title=Example_Image_Stitching
-   *
-   * @param descriptor
-   * @param associator
-   * @param matcher
-   * @param imageA
-   * @param imageB
-   * @param scale
-   * @return
-   */
+    *
+    * http://boofcv.org/index.php?title=Example_Image_Stitching
+    *
+    * @param descriptor
+    * @param associator
+    * @param matcher
+    * @param imageA
+    * @param imageB
+    * @param scale
+    * @return
+    */
   def stitch(
-    descriptor: DetectDescribePoint[GrayF32, BrightFeature],
-    associator: AssociateDescription[BrightFeature],
-    matcher: ModelMatcher[Homography2D_F64, AssociatedPair]
+      descriptor: DetectDescribePoint[GrayF32, BrightFeature],
+      associator: AssociateDescription[BrightFeature],
+      matcher: ModelMatcher[Homography2D_F64, AssociatedPair]
   )(
-    imageA: BufferedImage,
-    imageB: BufferedImage,
-    scale: Double
+      imageA: BufferedImage,
+      imageB: BufferedImage,
+      scale: Double
   ): BufferedImage = {
     // Convert the images to the proper image format.
-    val inputA = ConvertBufferedImage.convertFromSingle(imageA, null, classOf[GrayF32])
-    val inputB = ConvertBufferedImage.convertFromSingle(imageB, null, classOf[GrayF32])
+    val inputA =
+      ConvertBufferedImage.convertFromSingle(imageA, null, classOf[GrayF32])
+    val inputB =
+      ConvertBufferedImage.convertFromSingle(imageB, null, classOf[GrayF32])
 
     // Convert into a colorized format.
-    val colorA = ConvertBufferedImage.convertFromMulti(imageA, null, true, classOf[GrayF32])
-    val colorB = ConvertBufferedImage.convertFromMulti(imageB, null, true, classOf[GrayF32])
+    val colorA = ConvertBufferedImage
+      .convertFromMulti(imageA, null, true, classOf[GrayF32])
+    val colorB = ConvertBufferedImage
+      .convertFromMulti(imageB, null, true, classOf[GrayF32])
 
     // Calculate the transform from the image to the output image.
-    val a2o = new Homography2D_F64(scale, 0, colorA.width/4, 0, scale, colorA.height/4, 0, 0, 1)
+    val a2o = new Homography2D_F64(scale,
+                                   0,
+                                   colorA.width / 4,
+                                   0,
+                                   scale,
+                                   colorA.height / 4,
+                                   0,
+                                   0,
+                                   1)
     val o2a = a2o.invert(null)
     val a2b = homography(descriptor, associator, matcher)(inputA, inputB)
     val o2b = o2a.concat(a2b, null)
@@ -163,19 +190,23 @@ object Stitcher {
 
     // Setup the rendering toolchain.
     val model = new PixelTransformHomography_F32
-    val interpolater = FactoryInterpolation.bilinearPixelS(classOf[GrayF32], BorderType.ZERO)
-    val distortion = DistortSupport.createDistortPL(classOf[GrayF32], model, interpolater, false)
+    val interpolater =
+      FactoryInterpolation.bilinearPixelS(classOf[GrayF32], BorderType.ZERO)
+    val distortion = DistortSupport
+      .createDistortPL(classOf[GrayF32], model, interpolater, false)
     distortion.setRenderAll(false)
 
     // Construct the stitched image by rendering each image using the homographies.
     val output = colorA.createSameShape()
+    output.reshape(10000, 10000)
     model.set(o2a)
     distortion.apply(colorA, output)
     model.set(o2b)
     distortion.apply(colorB, output)
 
     // Convert the output image to a BufferedImage.
-    val stitched = new BufferedImage(output.width, output.height, imageA.getType)
+    val stitched =
+      new BufferedImage(output.width, output.height, imageA.getType)
     ConvertBufferedImage.convertTo(output, stitched, true)
   }
 
