@@ -48,20 +48,24 @@ object Stitcher {
 
     // Stitch together images.
     val twoPiece = stitch(descriptor, associator, matcher)(
-        ImageIO.read(new File("stitch-assets/living-room-0.jpg")),
-        ImageIO.read(new File("stitch-assets/living-room-1.jpg")),
+        ImageIO.read(new File("stitch-assets/desk-0.jpg")),
+        ImageIO.read(new File("stitch-assets/desk-1.jpg")),
         1.0
     )
 
-    ShowImages.showWindow(twoPiece, "Stitched Images", true)
+//    ShowImages.showWindow(twoPiece, "Stitched Images", true)
 
     print(twoPiece.getHeight() + " " + twoPiece.getWidth())
 
-    val tpFile = new File("two-piece.png")
-    ImageIO.write(twoPiece, "png", tpFile)
-//    val threePiece = stitch(descriptor, associator, matcher)(
-//      twoPiece
-//    )
+    val tpFile = new File("two-piece.jpg")
+    ImageIO.write(twoPiece, "jpg", tpFile)
+    val threePiece = stitch(descriptor, associator, matcher)(
+        ImageIO.read(new File("stitch-assets/desk-4.jpg")),
+        twoPiece,
+        1.0
+    )
+    val three = new File("three-piece.jpg")
+    ImageIO.write(threePiece, "jpg", three)
   }
 
   /**
@@ -198,7 +202,7 @@ object Stitcher {
 
     // Construct the stitched image by rendering each image using the homographies.
     val output = colorA.createSameShape()
-    output.reshape(10000, 10000)
+    output.reshape(6000, 6000)
     model.set(o2a)
     distortion.apply(colorA, output)
     model.set(o2b)
