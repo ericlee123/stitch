@@ -46,26 +46,68 @@ object Stitcher {
     val matcher =
       FactoryMultiViewRobust.homographyRansac(null, new ConfigRansac(60, 3))
 
-    // Stitch together images.
-    val twoPiece = stitch(descriptor, associator, matcher)(
-        ImageIO.read(new File("stitch-assets/desk-0.jpg")),
-        ImageIO.read(new File("stitch-assets/desk-1.jpg")),
+    // do the stitching
+    val width = 1920
+    val height = 1080
+    var mainFrame = ImageIO.read(new File("stitch-assets/balcony-2.jpg"))
+
+    var scaledWidth = (height.toDouble / mainFrame.getHeight()) * mainFrame
+        .getWidth()
+    scaledWidth = Math.floor(scaledWidth)
+
+    var resized =
+      new BufferedImage(scaledWidth.toInt, 1080, BufferedImage.TYPE_INT_RGB)
+    resized
+      .createGraphics()
+      .drawImage(mainFrame, 0, 0, scaledWidth.toInt, 1080, null)
+
+    var wideFrame =
+      new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
+    val offset = (width - resized.getWidth()).toDouble / 2
+    wideFrame
+      .createGraphics()
+      .drawImage(resized,
+                 offset.toInt,
+                 0,
+                 resized.getWidth(),
+                 resized.getHeight(),
+                 null)
+
+    var stitching = stitch(descriptor, associator, matcher)(
+        wideFrame,
+        ImageIO.read(new File("stitch-assets/balcony-3.jpg")),
         1.0
     )
 
-//    ShowImages.showWindow(twoPiece, "Stitched Images", true)
-
-    print(twoPiece.getHeight() + " " + twoPiece.getWidth())
-
-    val tpFile = new File("two-piece.jpg")
-    ImageIO.write(twoPiece, "jpg", tpFile)
-    val threePiece = stitch(descriptor, associator, matcher)(
-        ImageIO.read(new File("stitch-assets/desk-4.jpg")),
-        twoPiece,
+    stitching = stitch(descriptor, associator, matcher)(
+        stitching,
+        ImageIO.read(new File("stitch-assets/balcony-1.jpg")),
         1.0
     )
-    val three = new File("three-piece.jpg")
-    ImageIO.write(threePiece, "jpg", three)
+
+    ImageIO.write(stitching, "jpg", new File("looks-good.jpg"))
+
+//    stitching = stitch(descriptor, associator, matcher)(
+//        stitching,
+//        ImageIO.read(new File("stitch-assets/balcony-3.jpg")),
+//        1.0
+//    )
+//
+//    stitching = stitch(descriptor, associator, matcher)(
+//        stitching,
+//        ImageIO.read(new File("stitch-assets/balcony-0.jpg")),
+//        1.0
+//    )
+
+//    var i = 0
+//    for (i <- 2 to 2) {
+//      stitching = stitch(descriptor, associator, matcher)(
+//          stitching,
+//          ImageIO.read(new File("stitch-assets/balcony-" + i + ".jpg")),
+//          1.0
+//      )
+//    }
+//    ImageIO.write(stitching, "jpg", new File("looks-good.jpg"))
   }
 
   /**
@@ -174,23 +216,27 @@ object Stitcher {
     // Convert into a colorized format.
     val colorA = ConvertBufferedImage
       .convertFromMulti(imageA, null, true, classOf[GrayF32])
+    val colorAcopy = ConvertBufferedImage
+      .convertFromMulti(imageA, null, true, classOf[GrayF32])
     val colorB = ConvertBufferedImage
       .convertFromMulti(imageB, null, true, classOf[GrayF32])
 
     // Calculate the transform from the image to the output image.
-    val a2o = new Homography2D_F64(scale,
-                                   0,
-                                   colorA.width / 4,
-                                   0,
-                                   scale,
-                                   colorA.height / 4,
-                                   0,
-                                   0,
-                                   1)
-    val o2a = a2o.invert(null)
+//    val a2o = new Homography2D_F64(scale,
+//                                   0,
+//                                   colorA.width / 4,
+//                                   0,
+//                                   scale,
+//                                   colorA.height / 4,
+//                                   0,
+//                                   0,
+//                                   1)
+//    val o2a = a2o.invert(null)
+//    val a2b = homography(descriptor, associator, matcher)(inputA, inputB)
+//    val o2b = o2a.concat(a2b, null)
+//    val b2o = o2b.invert(null)
     val a2b = homography(descriptor, associator, matcher)(inputA, inputB)
-    val o2b = o2a.concat(a2b, null)
-    val b2o = o2b.invert(null)
+    val a2a = homography(descriptor, associator, matcher)(inputA, inputA) // for overlap
 
     // Setup the rendering toolchain.
     val model = new PixelTransformHomography_F32
@@ -201,17 +247,20 @@ object Stitcher {
     distortion.setRenderAll(false)
 
     // Construct the stitched image by rendering each image using the homographies.
-    val output = colorA.createSameShape()
-    output.reshape(6000, 6000)
-    model.set(o2a)
-    distortion.apply(colorA, output)
-    model.set(o2b)
-    distortion.apply(colorB, output)
+//    val output = colorA.createSameShape()
+    model.set(a2b)
+    distortion.apply(colorB, colorA)
+    model.set(a2a)
+    distortion.apply(colorAcopy, colorA)
+//    model.set(o2a)
+//    distortion.apply(colorA, output)
+//    model.set(o2b)
+//    distortion.apply(colorB, output)
 
     // Convert the output image to a BufferedImage.
     val stitched =
-      new BufferedImage(output.width, output.height, imageA.getType)
-    ConvertBufferedImage.convertTo(output, stitched, true)
+      new BufferedImage(colorA.width, colorA.height, imageA.getType)
+    ConvertBufferedImage.convertTo(colorA, stitched, true)
   }
 
 }
