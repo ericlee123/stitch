@@ -1,3 +1,5 @@
+// format: OFF
+
 package com.stitch.core
 
 import boofcv.abst.feature.associate.AssociateDescription
@@ -32,159 +34,113 @@ import scala.collection.mutable.ListBuffer
 
 object Stitcher {
 
+  val videoPath = "stitch-assets/axis-allies.mp4"
+
   def main(args: Array[String]): Unit = {
 
-    // process video into sequence of frames
-    val frameSequence = loadVideoFrames("stitch-assets/axis-allies.mp4")
+    // generate individual frames on disk
+    // stitch them together given video dimensionsc
 
     val width = 1920
     val height = 1080
 
-    generateStitchedImages(frameSequence, width, height)
+    val videoPath = "stitch-assets/axis-allies.mp4"
+    val frameFolder = generateVideoFrames(videoPath)
+
+    generateStitchedImages(frameFolder, width, height)
   }
 
-  def generateStitchedImages(
-      frames: Seq[BufferedImage],
-      width: Int,
-      height: Int
-  ): Unit = {
-    val lookFrames = 300
-    val jumpFrames = 50
-    for (i <- 400 to 400) {
-      ImageIO.write(
-          stitchFrame(i, frames, lookFrames, jumpFrames, width, height),
-          "png",
-          new File("stitched-video-frames/image-" + "%03d".format(i) + ".png"))
+  def generateVideoFrames( videoPath: String ): String = {
+    //generate frames using ffmpeg (because build and other tools are fucked)
+    print("generating video frames...")
+    val frameFolder = "video-frames"
+//    new ProcessBuilder("mkdir", frameFolder).start().waitFor()
+//    val pb = new ProcessBuilder("ffmpeg", "-i", videoPath, frameFolder + "/image-%07d.png")
+//    val p = pb.start().waitFor()
+    println("done")
+    frameFolder
+  }
+
+  def generateStitchedImages( frameFolder: String, width: Int, height: Int): Unit = {
+
+    val outputFolder = "stitched-video-frames"
+    new ProcessBuilder("mkdir", outputFolder).start().waitFor()
+
+    // figure out how many frames were generated
+    val numFrames = new File(frameFolder).listFiles().length
+    val lookDistance = 150
+    val jumpDistance = 50
+    val spicyCurry = stitchFrame(width, height, lookDistance, jumpDistance, frameFolder, numFrames)(_)
+    for (i <- 100 to 100) { // TODO: probably should do some smart functional mapping stuff here
+      print("stitching frame " + i + "...")
+      ImageIO.write(spicyCurry(i), "png", new File(outputFolder + "/image-%07d.png".format(i)))
+      println("done")
     }
   }
 
-  def loadVideoFrames(
-      videoPath: String
-  ): Seq[BufferedImage] = {
-    // generate frames using ffmpeg (because build and other tools are fucked)
-//    print("generating video frames...")
-//    new ProcessBuilder("mkdir", "video-frames").start()
-//    val pb = new ProcessBuilder("ffmpeg",
-//                                "-i",
-//                                videoPath,
-//                                "video-frames/image-%03d.png")
-//    val p = pb.start()
-//    p.waitFor();
-//    println("done")
+  def stitchFrame( width: Int, height: Int, lookDistance: Int, jumpDistance: Int, frameFolder: String, numFrames: Int )( frameIndex: Int ): BufferedImage = {
+    val nakedFrame = ImageIO.read(new File(frameFolder + "/image-%07d.png".format(frameIndex)))
+    var blackBarred = getSizedFrame(nakedFrame, width, height)
 
-    // load images into memory
-    println("loading frames into memory...")
-    var videoFrames = List[BufferedImage]()
-    val dir = new File("video-frames")
-    val frameImages = dir.listFiles()
-    (1 to frameImages.length).map(i =>
-          ImageIO.read(
-              new File("video-frames/image-" + "%03d".format(i) + ".png")))
-  }
+    // make the screen wider than necessary for extra descriptors
+    val wideSize = 4000
+    var wideFrame = new BufferedImage(wideSize, wideSize, blackBarred.getType())
+    wideFrame.createGraphics().drawImage(blackBarred, (wideSize - height) / 2, (wideSize - width) / 2, width, height, null)
 
-  /**
-    *
-    * @param inputA
-    * @param inputB
-    * @param descriptor
-    * @param associator
-    * @param matcher
-    * @return
-    */
-  def homography(
-      descriptor: DetectDescribePoint[GrayF32, BrightFeature],
-      associator: AssociateDescription[BrightFeature],
-      matcher: ModelMatcher[Homography2D_F64, AssociatedPair]
-  )(
-      inputA: GrayF32,
-      inputB: GrayF32
-  ): Homography2D_F64 = {
-    // Locate a matching between the interest points of the images.
-    val (pointsA, descA) = describe(descriptor)(inputA)
-    val (pointsB, descB) = describe(descriptor)(inputB)
-    val matches = matching(associator)(descA, descB)
-
-    // Construct an association between points.
-    val pairs = mutable.Buffer.empty[AssociatedPair]
-    (0 until matches.size).map(matches.get).foreach { m =>
-      pairs += new AssociatedPair(pointsA(m.src), pointsB(m.dst), false)
+//    val redCurry = doHomography(blackBarred) // CAN I DO THIS???
+    for (i <- jumpDistance to lookDistance by jumpDistance) { // TODO: do some cool functional mapping here too
+      if (frameIndex + i <= numFrames) {
+        wideFrame = doHomography(wideFrame, frameFolder)(frameIndex + i)
+      }
+      if (frameIndex - i > 0) {
+        blackBarred = doHomography(blackBarred, frameFolder)(frameIndex - i)
+      }
     }
-
-    // Attempt to construct the homography.
-    if (!matcher.process(pairs.asJava))
-      throw new RuntimeException("Unable to determine homography.")
-    else
-      matcher.getModelParameters.copy()
+    wideFrame
   }
 
-  /**
-    *
-    * @param detector
-    * @param input
-    * @return
-    */
-  def describe(
-      detector: DetectDescribePoint[GrayF32, BrightFeature]
-  )(
-      input: GrayF32
-  ): (Seq[Point2D_F64], FastQueue[BrightFeature]) = {
-    val points = mutable.Buffer.empty[Point2D_F64]
-    val descriptors = UtilFeature.createQueue(detector, 100)
-
-    detector.detect(input)
-    (0 until detector.getNumberOfFeatures) foreach { i =>
-      points += detector.getLocation(i).copy()
-      descriptors.grow().setTo(detector.getDescription(i))
-    }
-
-    (points, descriptors)
-  }
-
-  /**
-    *
-    * @param descriptorsA
-    * @param descriptorsB
-    * @return
-    */
-  def matching(
-      associator: AssociateDescription[BrightFeature]
-  )(
-      descriptorsA: FastQueue[BrightFeature],
-      descriptorsB: FastQueue[BrightFeature]
-  ): FastQueue[AssociatedIndex] = {
-    associator.setSource(descriptorsA)
-    associator.setDestination(descriptorsB)
-    associator.associate()
-    associator.getMatches
-  }
-
-  def getSizedFrame(
-      frame: BufferedImage,
-      width: Int,
-      height: Int
-  ): BufferedImage = {
-
+  def getSizedFrame( frame: BufferedImage, width: Int, height: Int): BufferedImage = {
     // TODO: don't assume that the black bars are on the side (safe assumption though)
-    var scaledWidth = Math
-      .floor((height.toDouble / frame.getHeight()) * frame.getWidth())
-      .toInt
+    var scaledWidth = Math.floor((height.toDouble / frame.getHeight()) * frame.getWidth()).toInt
 
-    var resized =
-      new BufferedImage(scaledWidth, height, BufferedImage.TYPE_INT_RGB)
+    var resized = new BufferedImage(scaledWidth, height, BufferedImage.TYPE_INT_RGB)
     resized.createGraphics().drawImage(frame, 0, 0, scaledWidth, height, null)
 
-    var wideFrame =
-      new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
+    var wideFrame = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
     val offset = (width - resized.getWidth()).toDouble / 2
+    wideFrame.createGraphics().drawImage(resized, offset.toInt, 0, resized.getWidth(), resized.getHeight(), null)
     wideFrame
-      .createGraphics()
-      .drawImage(resized,
-                 offset.toInt,
-                 0,
-                 resized.getWidth(),
-                 resized.getHeight(),
-                 null)
-    wideFrame
+  }
+
+  def doHomography( currentFrame: BufferedImage, frameFolder: String )( stitchIndex: Int ): BufferedImage = {
+    // TODO: tweak this later to be better
+    // Setup the interest point descriptor, associator, and matcher.
+    val descriptor = FactoryDetectDescribe.surfStable(new ConfigFastHessian(1, 2, 200, 1, 9, 4, 4), null, null, classOf[GrayF32])
+    val associator = FactoryAssociation.greedy(FactoryAssociation.scoreEuclidean(classOf[BrightFeature], true), 2, true)
+    val matcher = FactoryMultiViewRobust.homographyRansac(null, new ConfigRansac(60, 3))
+
+    // Setup the rendering toolchain.
+    val model = new PixelTransformHomography_F32
+    val interpolater = FactoryInterpolation.bilinearPixelS(classOf[GrayF32], BorderType.ZERO)
+    val distortion = DistortSupport.createDistortPL(classOf[GrayF32], model, interpolater, false)
+    distortion.setRenderAll(false)
+
+    val otherImage = ImageIO.read(new File(frameFolder + "/image-%07d.png".format(stitchIndex + 1)))
+
+    // do the homography
+    val inputMain = ConvertBufferedImage.convertFromSingle(currentFrame, null, classOf[GrayF32])
+    val inputOther = ConvertBufferedImage.convertFromSingle(otherImage, null, classOf[GrayF32])
+
+    val colorMain = ConvertBufferedImage.convertFromMulti(currentFrame, null, true, classOf[GrayF32])
+    val colorOther = ConvertBufferedImage.convertFromMulti(otherImage, null, true, classOf[GrayF32])
+
+    val other2Main = homography(descriptor, associator, matcher)(inputMain, inputOther)
+
+    model.set(other2Main)
+    distortion.apply(colorOther, colorMain)
+
+    val stitched = new BufferedImage(colorMain.width, colorMain.height, currentFrame.getType())
+    ConvertBufferedImage.convertTo(colorMain, stitched, true)
   }
 
   def stitchFrame(
@@ -354,6 +310,82 @@ object Stitcher {
     val stitched =
       new BufferedImage(colorA.width, colorA.height, imageA.getType)
     ConvertBufferedImage.convertTo(colorA, stitched, true)
+  }
+
+  /**
+    *
+    * @param inputA
+    * @param inputB
+    * @param descriptor
+    * @param associator
+    * @param matcher
+    * @return
+    */
+  def homography(
+                  descriptor: DetectDescribePoint[GrayF32, BrightFeature],
+                  associator: AssociateDescription[BrightFeature],
+                  matcher: ModelMatcher[Homography2D_F64, AssociatedPair]
+                )(
+                  inputA: GrayF32,
+                  inputB: GrayF32
+                ): Homography2D_F64 = {
+    // Locate a matching between the interest points of the images.
+    val (pointsA, descA) = describe(descriptor)(inputA)
+    val (pointsB, descB) = describe(descriptor)(inputB)
+    val matches = matching(associator)(descA, descB)
+
+    // Construct an association between points.
+    val pairs = mutable.Buffer.empty[AssociatedPair]
+    (0 until matches.size).map(matches.get).foreach { m =>
+      pairs += new AssociatedPair(pointsA(m.src), pointsB(m.dst), false)
+    }
+
+    // Attempt to construct the homography.
+    if (!matcher.process(pairs.asJava))
+      throw new RuntimeException("Unable to determine homography.")
+    else
+      matcher.getModelParameters.copy()
+  }
+
+  /**
+    *
+    * @param detector
+    * @param input
+    * @return
+    */
+  def describe(
+                detector: DetectDescribePoint[GrayF32, BrightFeature]
+              )(
+                input: GrayF32
+              ): (Seq[Point2D_F64], FastQueue[BrightFeature]) = {
+    val points = mutable.Buffer.empty[Point2D_F64]
+    val descriptors = UtilFeature.createQueue(detector, 100)
+
+    detector.detect(input)
+    (0 until detector.getNumberOfFeatures) foreach { i =>
+      points += detector.getLocation(i).copy()
+      descriptors.grow().setTo(detector.getDescription(i))
+    }
+
+    (points, descriptors)
+  }
+
+  /**
+    *
+    * @param descriptorsA
+    * @param descriptorsB
+    * @return
+    */
+  def matching(
+                associator: AssociateDescription[BrightFeature]
+              )(
+                descriptorsA: FastQueue[BrightFeature],
+                descriptorsB: FastQueue[BrightFeature]
+              ): FastQueue[AssociatedIndex] = {
+    associator.setSource(descriptorsA)
+    associator.setDestination(descriptorsB)
+    associator.associate()
+    associator.getMatches
   }
 
 }
