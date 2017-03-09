@@ -4,7 +4,7 @@ import boofcv.abst.feature.associate.AssociateDescription
 import boofcv.abst.feature.detdesc.DetectDescribePoint
 import boofcv.abst.feature.detect.interest.ConfigFastHessian
 import boofcv.alg.descriptor.UtilFeature
-import boofcv.alg.distort.PixelTransformHomography_F32
+import boofcv.alg.distort.{PixelTransformHomography_F32, PointTransformHomography_F32}
 import boofcv.alg.distort.impl.DistortSupport
 import boofcv.core.image.border.BorderType
 import boofcv.factory.feature.associate.FactoryAssociation
@@ -15,99 +15,71 @@ import boofcv.gui.image.ShowImages
 import boofcv.io.image.ConvertBufferedImage
 import boofcv.struct.feature.{AssociatedIndex, BrightFeature}
 import boofcv.struct.geo.AssociatedPair
-import boofcv.struct.image.{GrayF32}
+import boofcv.struct.image.{Color3_F32, GrayF32, ImageType, Planar}
 import georegression.struct.homography.Homography2D_F64
 import georegression.struct.point.Point2D_F64
 import java.awt.image.BufferedImage
+
 import org.ddogleg.fitting.modelset.ModelMatcher
 import org.ddogleg.struct.FastQueue
+
 import scala.collection.mutable
 import collection.JavaConverters._
 import java.io.File
 import javax.imageio.ImageIO
 
+import scala.collection.mutable.ListBuffer
+
 object Stitcher {
 
   def main(args: Array[String]): Unit = {
-    // Setup the interest point descriptor, associator, and matcher.
-    val descriptor = FactoryDetectDescribe.surfStable(
-        new ConfigFastHessian(1, 2, 200, 1, 9, 4, 4),
-        null,
-        null,
-        classOf[GrayF32]
-    )
 
-    val associator = FactoryAssociation.greedy(
-        FactoryAssociation.scoreEuclidean(classOf[BrightFeature], true),
-        2,
-        true
-    )
+    // process video into sequence of frames
+    val frameSequence = loadVideoFrames("stitch-assets/axis-allies.mp4")
 
-    val matcher =
-      FactoryMultiViewRobust.homographyRansac(null, new ConfigRansac(60, 3))
-
-    // do the stitching
     val width = 1920
     val height = 1080
-    var mainFrame = ImageIO.read(new File("stitch-assets/balcony-2.jpg"))
 
-    var scaledWidth = (height.toDouble / mainFrame.getHeight()) * mainFrame
-        .getWidth()
-    scaledWidth = Math.floor(scaledWidth)
+    generateStitchedImages(frameSequence, width, height)
+  }
 
-    var resized =
-      new BufferedImage(scaledWidth.toInt, 1080, BufferedImage.TYPE_INT_RGB)
-    resized
-      .createGraphics()
-      .drawImage(mainFrame, 0, 0, scaledWidth.toInt, 1080, null)
+  def generateStitchedImages(
+      frames: Seq[BufferedImage],
+      width: Int,
+      height: Int
+  ): Unit = {
+    val lookFrames = 300
+    val jumpFrames = 50
+    for (i <- 400 to 400) {
+      ImageIO.write(
+          stitchFrame(i, frames, lookFrames, jumpFrames, width, height),
+          "png",
+          new File("stitched-video-frames/image-" + "%03d".format(i) + ".png"))
+    }
+  }
 
-    var wideFrame =
-      new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
-    val offset = (width - resized.getWidth()).toDouble / 2
-    wideFrame
-      .createGraphics()
-      .drawImage(resized,
-                 offset.toInt,
-                 0,
-                 resized.getWidth(),
-                 resized.getHeight(),
-                 null)
+  def loadVideoFrames(
+      videoPath: String
+  ): Seq[BufferedImage] = {
+    // generate frames using ffmpeg (because build and other tools are fucked)
+//    print("generating video frames...")
+//    new ProcessBuilder("mkdir", "video-frames").start()
+//    val pb = new ProcessBuilder("ffmpeg",
+//                                "-i",
+//                                videoPath,
+//                                "video-frames/image-%03d.png")
+//    val p = pb.start()
+//    p.waitFor();
+//    println("done")
 
-    var stitching = stitch(descriptor, associator, matcher)(
-        wideFrame,
-        ImageIO.read(new File("stitch-assets/balcony-3.jpg")),
-        1.0
-    )
-
-    stitching = stitch(descriptor, associator, matcher)(
-        stitching,
-        ImageIO.read(new File("stitch-assets/balcony-1.jpg")),
-        1.0
-    )
-
-    ImageIO.write(stitching, "jpg", new File("looks-good.jpg"))
-
-//    stitching = stitch(descriptor, associator, matcher)(
-//        stitching,
-//        ImageIO.read(new File("stitch-assets/balcony-3.jpg")),
-//        1.0
-//    )
-//
-//    stitching = stitch(descriptor, associator, matcher)(
-//        stitching,
-//        ImageIO.read(new File("stitch-assets/balcony-0.jpg")),
-//        1.0
-//    )
-
-//    var i = 0
-//    for (i <- 2 to 2) {
-//      stitching = stitch(descriptor, associator, matcher)(
-//          stitching,
-//          ImageIO.read(new File("stitch-assets/balcony-" + i + ".jpg")),
-//          1.0
-//      )
-//    }
-//    ImageIO.write(stitching, "jpg", new File("looks-good.jpg"))
+    // load images into memory
+    println("loading frames into memory...")
+    var videoFrames = List[BufferedImage]()
+    val dir = new File("video-frames")
+    val frameImages = dir.listFiles()
+    (1 to frameImages.length).map(i =>
+          ImageIO.read(
+              new File("video-frames/image-" + "%03d".format(i) + ".png")))
   }
 
   /**
@@ -186,6 +158,135 @@ object Stitcher {
     associator.getMatches
   }
 
+  def getSizedFrame(
+      frame: BufferedImage,
+      width: Int,
+      height: Int
+  ): BufferedImage = {
+
+    // TODO: don't assume that the black bars are on the side (safe assumption though)
+    var scaledWidth = Math
+      .floor((height.toDouble / frame.getHeight()) * frame.getWidth())
+      .toInt
+
+    var resized =
+      new BufferedImage(scaledWidth, height, BufferedImage.TYPE_INT_RGB)
+    resized.createGraphics().drawImage(frame, 0, 0, scaledWidth, height, null)
+
+    var wideFrame =
+      new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
+    val offset = (width - resized.getWidth()).toDouble / 2
+    wideFrame
+      .createGraphics()
+      .drawImage(resized,
+                 offset.toInt,
+                 0,
+                 resized.getWidth(),
+                 resized.getHeight(),
+                 null)
+    wideFrame
+  }
+
+  def stitchFrame(
+      index: Int,
+      frames: Seq[BufferedImage],
+      lookFrames: Int,
+      jumpFrames: Int,
+      width: Int,
+      height: Int
+  ): BufferedImage = {
+
+    // Setup the interest point descriptor, associator, and matcher.
+    val descriptor = FactoryDetectDescribe.surfStable(
+        new ConfigFastHessian(1, 2, 200, 1, 9, 4, 4),
+        null,
+        null,
+        classOf[GrayF32]
+    )
+    val associator = FactoryAssociation.greedy(
+        FactoryAssociation.scoreEuclidean(classOf[BrightFeature], true),
+        2,
+        true
+    )
+    val matcher =
+      FactoryMultiViewRobust.homographyRansac(null, new ConfigRansac(60, 3))
+
+    var mainFrame = getSizedFrame(frames(index), width, height)
+    for (i <- 1 to lookFrames by jumpFrames) {
+      if (index - i >= 0) {
+        mainFrame = stitch(descriptor, associator, matcher)(
+            mainFrame,
+            frames(index - i),
+            1.0
+        )
+      }
+      if (index + i < frames.length) {
+        mainFrame = stitch(descriptor, associator, matcher)(
+            mainFrame,
+            frames(index + i),
+            1.0
+        )
+      }
+    }
+    mainFrame
+
+//    var surroundingFrames = ListBuffer[BufferedImage]()
+//    for (i <- lookFrames to 1 by -jumpFrames) {
+//      if (index + i < frames.length) {
+//        surroundingFrames += frames(index + i)
+//      }
+//      if (index - i >= 0) {
+//        surroundingFrames += frames(index - i)
+//      }
+//    }
+//    println(surroundingFrames.length + " surrounding frames")
+//
+//    val mainFrame = getSizedFrame(frames(index), width, height)
+//
+//    // Convert the images to the proper image format
+//    val mainInput =
+//      ConvertBufferedImage.convertFromSingle(mainFrame, null, classOf[GrayF32])
+//    val inputs = ListBuffer[GrayF32]()
+//    for (i <- 0 to surroundingFrames.length - 1) {
+//      inputs += ConvertBufferedImage
+//        .convertFromSingle(surroundingFrames(i), null, classOf[GrayF32])
+//    }
+//
+//    // Convert to a colorized format
+//    var mainColor = ConvertBufferedImage
+//      .convertFromMulti(mainFrame, null, true, classOf[GrayF32])
+//    val colors = ListBuffer[Planar[GrayF32]]()
+//    for (i <- 0 to surroundingFrames.length - 1) {
+//      colors += ConvertBufferedImage
+//        .convertFromMulti(surroundingFrames(i), null, true, classOf[GrayF32])
+//    }
+//
+//    val homographies2Main = ListBuffer[Homography2D_F64]()
+//    for (i <- 0 to surroundingFrames.length - 1) {
+//      homographies2Main += homography(descriptor, associator, matcher)(
+//          mainInput,
+//          inputs(i))
+//    }
+//
+//    // Setup the rendering toolchain.
+//    val model = new PixelTransformHomography_F32
+//    val interpolater =
+//      FactoryInterpolation.bilinearPixelS(classOf[GrayF32], BorderType.ZERO)
+//    val distortion = DistortSupport
+//      .createDistortPL(classOf[GrayF32], model, interpolater, false)
+//    distortion.setRenderAll(false)
+//
+//    for (i <- 0 to surroundingFrames.length - 1) {
+//      model.set(homographies2Main(i))
+//      distortion.apply(colors(i), mainColor)
+//    }
+//
+//    val stitched = new BufferedImage(mainFrame.getWidth,
+//                                     mainFrame.getHeight(),
+//                                     mainFrame.getType())
+//    ConvertBufferedImage.convertTo(mainColor, stitched, true)
+  }
+
   /**
     *
     * http://boofcv.org/index.php?title=Example_Image_Stitching
@@ -216,8 +317,6 @@ object Stitcher {
     // Convert into a colorized format.
     val colorA = ConvertBufferedImage
       .convertFromMulti(imageA, null, true, classOf[GrayF32])
-    val colorAcopy = ConvertBufferedImage
-      .convertFromMulti(imageA, null, true, classOf[GrayF32])
     val colorB = ConvertBufferedImage
       .convertFromMulti(imageB, null, true, classOf[GrayF32])
 
@@ -236,7 +335,7 @@ object Stitcher {
 //    val o2b = o2a.concat(a2b, null)
 //    val b2o = o2b.invert(null)
     val a2b = homography(descriptor, associator, matcher)(inputA, inputB)
-    val a2a = homography(descriptor, associator, matcher)(inputA, inputA) // for overlap
+//    val a2a = homography(descriptor, associator, matcher)(inputA, inputA) // for overlap
 
     // Setup the rendering toolchain.
     val model = new PixelTransformHomography_F32
@@ -250,12 +349,6 @@ object Stitcher {
 //    val output = colorA.createSameShape()
     model.set(a2b)
     distortion.apply(colorB, colorA)
-    model.set(a2a)
-    distortion.apply(colorAcopy, colorA)
-//    model.set(o2a)
-//    distortion.apply(colorA, output)
-//    model.set(o2b)
-//    distortion.apply(colorB, output)
 
     // Convert the output image to a BufferedImage.
     val stitched =

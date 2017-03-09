@@ -1,4 +1,4 @@
-# BoofCv
+# BoofCV
 jar_library(name='boofcv', jars=[
   jar(org='org.boofcv', name='all', rev='0.26')
 
