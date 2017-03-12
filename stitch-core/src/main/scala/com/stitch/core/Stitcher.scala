@@ -54,9 +54,9 @@ object Stitcher {
     //generate frames using ffmpeg (because build and other tools are fucked)
     print("generating video frames...")
     val frameFolder = "video-frames"
-//    new ProcessBuilder("mkdir", frameFolder).start().waitFor()
-//    val pb = new ProcessBuilder("ffmpeg", "-i", videoPath, frameFolder + "/image-%07d.png")
-//    val p = pb.start().waitForh b zr e()
+    new ProcessBuilder("mkdir", frameFolder).start().waitFor()
+    val pb = new ProcessBuilder("ffmpeg", "-i", videoPath, frameFolder + "/image-%07d.png")
+    val p = pb.start().waitFor()
     println(" done")
     frameFolder
   }
@@ -152,49 +152,6 @@ object Stitcher {
     wideFrame.createGraphics()
       .drawImage(originalFrame, (wideSize - height) / 2, (wideSize - width) / 2, width, height, null) // paste the original image on top
     wideFrame.getSubimage((wideSize - height) / 2, (wideSize - width) / 2, width, height)
-
-//    val twoBack = ImageIO.read(new File("video-frames/image-0000180.png"))
-//    val oneBack = ImageIO.read(new File("video-frames/image-0000200.png"))
-//
-//    // do the homography
-//    val inputMain = ConvertBufferedImage.convertFromSingle(wideFrame, null, classOf[GrayF32])
-//    val inputA = ConvertBufferedImage.convertFromSingle(twoBack, null, classOf[GrayF32])
-//    val inputB = ConvertBufferedImage.convertFromSingle(oneBack, null, classOf[GrayF32])
-//
-//    val colorMain = ConvertBufferedImage.convertFromMulti(wideFrame, null, true, classOf[GrayF32])
-//    val colorA = ConvertBufferedImage.convertFromMulti(twoBack, null, true, classOf[GrayF32])
-//    val colorB = ConvertBufferedImage.convertFromMulti(oneBack, null, true, classOf[GrayF32])
-//
-//    val b2a = fuck(oneBack, twoBack)
-//    val main2b = fuck(wideFrame, oneBack)
-//
-//    // Setup the rendering toolchain.
-//    val model = new PixelTransformHomography_F32
-//    val interpolater = FactoryInterpolation.bilinearPixelS(classOf[GrayF32], BorderType.ZERO)
-//    val distortion = DistortSupport.createDistortPL(classOf[GrayF32], model, interpolater, false)
-//    distortion.setRenderAll(false)
-//
-//    val main2a = main2b.concat(b2a, null)
-//    model.set(main2b)
-//    distortion.apply(colorB, colorMain)
-//    model.set(main2a)
-//    distortion.apply(colorA, colorMain)
-//
-//    val stitched = new BufferedImage(colorMain.width, colorMain.height, wideFrame.getType())
-//    ConvertBufferedImage.convertTo(colorMain, stitched, true)
-
-//    doHomography( wideFrame, frameFolder )( 180 )
-
-//    val redCurry = doHomography(blackBarred) // CAN I DO THIS???
-//    for (i <- jumpDistance to lookDistance by jumpDistance) { // TODO: do some cool functional mapping here too
-//      if (frameIndex + i <= numFrames) {
-//        wideFrame = doHomography(wideFrame, frameFolder)(frameIndex + i)
-//      }
-////      if (frameIndex - i > 0) {
-////        wideFrame = doHomography(wideFrame, frameFolder)(frameIndex - i)
-////      }
-//    }
-//    wideFrame
   }
 
   def getSizedFrame( frame: BufferedImage, width: Int, height: Int): BufferedImage = {
@@ -257,175 +214,6 @@ object Stitcher {
     val colorOther = ConvertBufferedImage.convertFromMulti(otherFrame, null, true, classOf[GrayF32])
 
     homography(descriptor, associator, matcher)(inputMain, inputOther)
-  }
-
-  def stitchFrame(
-      index: Int,
-      frames: Seq[BufferedImage],
-      lookFrames: Int,
-      jumpFrames: Int,
-      width: Int,
-      height: Int
-  ): BufferedImage = {
-
-    // Setup the interest point descriptor, associator, and matcher.
-    val descriptor = FactoryDetectDescribe.surfStable(
-        new ConfigFastHessian(1, 2, 200, 1, 9, 4, 4),
-        null,
-        null,
-        classOf[GrayF32]
-    )
-    val associator = FactoryAssociation.greedy(
-        FactoryAssociation.scoreEuclidean(classOf[BrightFeature], true),
-        2,
-        true
-    )
-    val matcher =
-      FactoryMultiViewRobust.homographyRansac(null, new ConfigRansac(60, 3))
-
-    var mainFrame = getSizedFrame(frames(index), width, height)
-    for (i <- 1 to lookFrames by jumpFrames) {
-      if (index - i >= 0) {
-        mainFrame = stitch(descriptor, associator, matcher)(
-            mainFrame,
-            frames(index - i),
-            1.0
-        )
-      }
-      if (index + i < frames.length) {
-        mainFrame = stitch(descriptor, associator, matcher)(
-            mainFrame,
-            frames(index + i),
-            1.0
-        )
-      }
-    }
-    mainFrame
-
-//    var surroundingFrames = ListBuffer[BufferedImage]()
-//    for (i <- lookFrames to 1 by -jumpFrames) {
-//      if (index + i < frames.length) {
-//        surroundingFrames += frames(index + i)
-//      }
-//      if (index - i >= 0) {
-//        surroundingFrames += frames(index - i)
-//      }
-//    }
-//    println(surroundingFrames.length + " surrounding frames")
-//
-//    val mainFrame = getSizedFrame(frames(index), width, height)
-//
-//    // Convert the images to the proper image format
-//    val mainInput =
-//      ConvertBufferedImage.convertFromSingle(mainFrame, null, classOf[GrayF32])
-//    val inputs = ListBuffer[GrayF32]()
-//    for (i <- 0 to surroundingFrames.length - 1) {
-//      inputs += ConvertBufferedImage
-//        .convertFromSingle(surroundingFrames(i), null, classOf[GrayF32])
-//    }
-//
-//    // Convert to a colorized format
-//    var mainColor = ConvertBufferedImage
-//      .convertFromMulti(mainFrame, null, true, classOf[GrayF32])
-//    val colors = ListBuffer[Planar[GrayF32]]()
-//    for (i <- 0 to surroundingFrames.length - 1) {
-//      colors += ConvertBufferedImage
-//        .convertFromMulti(surroundingFrames(i), null, true, classOf[GrayF32])
-//    }
-//
-//    val homographies2Main = ListBuffer[Homography2D_F64]()
-//    for (i <- 0 to surroundingFrames.length - 1) {
-//      homographies2Main += homography(descriptor, associator, matcher)(
-//          mainInput,
-//          inputs(i))
-//    }
-//
-//    // Setup the rendering toolchain.
-//    val model = new PixelTransformHomography_F32
-//    val interpolater =
-//      FactoryInterpolation.bilinearPixelS(classOf[GrayF32], BorderType.ZERO)
-//    val distortion = DistortSupport
-//      .createDistortPL(classOf[GrayF32], model, interpolater, false)
-//    distortion.setRenderAll(false)
-//
-//    for (i <- 0 to surroundingFrames.length - 1) {
-//      model.set(homographies2Main(i))
-//      distortion.apply(colors(i), mainColor)
-//    }
-//
-//    val stitched = new BufferedImage(mainFrame.getWidth,
-//                                     mainFrame.getHeight(),
-//                                     mainFrame.getType())
-//    ConvertBufferedImage.convertTo(mainColor, stitched, true)
-  }
-
-  /**
-    *
-    * http://boofcv.org/index.php?title=Example_Image_Stitching
-    *
-    * @param descriptor
-    * @param associator
-    * @param matcher
-    * @param imageA
-    * @param imageB
-    * @param scale
-    * @return
-    */
-  def stitch(
-      descriptor: DetectDescribePoint[GrayF32, BrightFeature],
-      associator: AssociateDescription[BrightFeature],
-      matcher: ModelMatcher[Homography2D_F64, AssociatedPair]
-  )(
-      imageA: BufferedImage,
-      imageB: BufferedImage,
-      scale: Double
-  ): BufferedImage = {
-    // Convert the images to the proper image format.
-    val inputA =
-      ConvertBufferedImage.convertFromSingle(imageA, null, classOf[GrayF32])
-    val inputB =
-      ConvertBufferedImage.convertFromSingle(imageB, null, classOf[GrayF32])
-
-    // Convert into a colorized format.
-    val colorA = ConvertBufferedImage
-      .convertFromMulti(imageA, null, true, classOf[GrayF32])
-    val colorB = ConvertBufferedImage
-      .convertFromMulti(imageB, null, true, classOf[GrayF32])
-
-    // Calculate the transform from the image to the output image.
-//    val a2o = new Homography2D_F64(scale,
-//                                   0,
-//                                   colorA.width / 4,
-//                                   0,
-//                                   scale,
-//                                   colorA.height / 4,
-//                                   0,
-//                                   0,
-//                                   1)
-//    val o2a = a2o.invert(null)
-//    val a2b = homography(descriptor, associator, matcher)(inputA, inputB)
-//    val o2b = o2a.concat(a2b, null)
-//    val b2o = o2b.invert(null)
-    val a2b = homography(descriptor, associator, matcher)(inputA, inputB)
-//    val a2a = homography(descriptor, associator, matcher)(inputA, inputA) // for overlap
-
-    // Setup the rendering toolchain.
-    val model = new PixelTransformHomography_F32
-    val interpolater =
-      FactoryInterpolation.bilinearPixelS(classOf[GrayF32], BorderType.ZERO)
-    val distortion = DistortSupport
-      .createDistortPL(classOf[GrayF32], model, interpolater, false)
-    distortion.setRenderAll(false)
-
-    // Construct the stitched image by rendering each image using the homographies.
-//    val output = colorA.createSameShape()
-    model.set(a2b)
-    distortion.apply(colorB, colorA)
-
-    // Convert the output image to a BufferedImage.
-    val stitched =
-      new BufferedImage(colorA.width, colorA.height, imageA.getType)
-    ConvertBufferedImage.convertTo(colorA, stitched, true)
   }
 
   /**
