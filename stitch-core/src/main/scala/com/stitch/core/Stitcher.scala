@@ -15,21 +15,18 @@ import boofcv.factory.geo.{ConfigRansac, FactoryMultiViewRobust}
 import boofcv.factory.interpolate.FactoryInterpolation
 import boofcv.gui.image.ShowImages
 import boofcv.io.image.ConvertBufferedImage
-import boofcv.struct.feature.{AssociatedIndex, BrightFeature}
+import boofcv.struct.feature.{AssociatedIndex, BrightFeature, TupleDesc_F64}
 import boofcv.struct.geo.AssociatedPair
 import boofcv.struct.image.{Color3_F32, GrayF32, ImageType, Planar}
 import georegression.struct.homography.Homography2D_F64
 import georegression.struct.point.Point2D_F64
 import java.awt.image.BufferedImage
-
 import org.ddogleg.fitting.modelset.ModelMatcher
 import org.ddogleg.struct.FastQueue
-
 import scala.collection.mutable
 import collection.JavaConverters._
 import java.io.File
 import javax.imageio.ImageIO
-
 import scala.collection.mutable.ListBuffer
 
 object Stitcher {
@@ -470,10 +467,10 @@ object Stitcher {
     * @return
     */
   def describe(
-                detector: DetectDescribePoint[GrayF32, BrightFeature]
-              )(
-                input: GrayF32
-              ): (Seq[Point2D_F64], FastQueue[BrightFeature]) = {
+    detector: DetectDescribePoint[GrayF32, BrightFeature]
+  )(
+    input: GrayF32
+  ): (Seq[Point2D_F64], FastQueue[BrightFeature]) = {
     val points = mutable.Buffer.empty[Point2D_F64]
     val descriptors = UtilFeature.createQueue(detector, 100)
 
@@ -487,17 +484,20 @@ object Stitcher {
   }
 
   /**
-    *
-    * @param descriptorsA
-    * @param descriptorsB
-    * @return
-    */
-  def matching(
-                associator: AssociateDescription[BrightFeature]
-              )(
-                descriptorsA: FastQueue[BrightFeature],
-                descriptorsB: FastQueue[BrightFeature]
-              ): FastQueue[AssociatedIndex] = {
+   * Returns a matching between the provided collections of feature descriptors. Utilizes the
+   * provided associator to match descriptors.
+   *
+   * @param descriptorsA Descriptors in first image.
+   * @param descriptorsB Descriptors in second image.
+   * @tparam D Type of descriptors.
+   * @return
+   */
+  def matching[D <: TupleDesc_F64](
+    associator: AssociateDescription[D]
+  )(
+    descriptorsA: FastQueue[D],
+    descriptorsB: FastQueue[D]
+  ): FastQueue[AssociatedIndex] = {
     associator.setSource(descriptorsA)
     associator.setDestination(descriptorsB)
     associator.associate()
