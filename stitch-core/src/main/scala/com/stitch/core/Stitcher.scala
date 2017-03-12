@@ -1,239 +1,233 @@
-// format: OFF
-
 package com.stitch.core
 
 import boofcv.abst.feature.associate.AssociateDescription
 import boofcv.abst.feature.detdesc.DetectDescribePoint
 import boofcv.abst.feature.detect.interest.ConfigFastHessian
 import boofcv.alg.descriptor.UtilFeature
-import boofcv.alg.distort.{PixelTransformHomography_F32, PointTransformHomography_F32}
+import boofcv.alg.distort.PixelTransformHomography_F32
 import boofcv.alg.distort.impl.DistortSupport
 import boofcv.core.image.border.BorderType
 import boofcv.factory.feature.associate.FactoryAssociation
 import boofcv.factory.feature.detdesc.FactoryDetectDescribe
 import boofcv.factory.geo.{ConfigRansac, FactoryMultiViewRobust}
 import boofcv.factory.interpolate.FactoryInterpolation
-import boofcv.gui.image.ShowImages
 import boofcv.io.image.ConvertBufferedImage
-import boofcv.struct.feature.{AssociatedIndex, BrightFeature, TupleDesc_F64}
+import boofcv.struct.feature.BrightFeature
 import boofcv.struct.geo.AssociatedPair
-import boofcv.struct.image.{Color3_F32, GrayF32, ImageType, Planar}
+import boofcv.struct.image.GrayF32
 import georegression.struct.homography.Homography2D_F64
 import georegression.struct.point.Point2D_F64
 import java.awt.image.BufferedImage
 import org.ddogleg.fitting.modelset.ModelMatcher
 import org.ddogleg.struct.FastQueue
 import scala.collection.mutable
-import collection.JavaConverters._
+import scala.collection.JavaConverters._
+import java.awt.Dimension
 import java.io.File
 import javax.imageio.ImageIO
-import scala.collection.mutable.ListBuffer
 
 object Stitcher {
 
-  val videoPath = "stitch-assets/axis-allies.mp4"
-
   def main(args: Array[String]): Unit = {
+    // Input parameters.
+    val size   = new Dimension(1920, 1080)
+    val video  = "stitch-assets/balcony.mp4"
+    val dir    = "/Users/ashwin/Downloads/stitcher"
+    val output = "stitch-assets/balcony-stitched.mp4"
+    val look   = 150
+    val jump   = 25
 
-    // generate individual frames on disk
-    // stitch them together given video dimensions
+    // Extract frames from the video using ffmpeg.
+    ffmpeg(video, dir + "/frame-%07d.png")
 
-    val width = 1920
-    val height = 1080
+    // Load all the extracted frames.
+    val frames = new File(dir)
+      .listFiles(f => f.getName.matches("frame-[0-9]+.png"))
+      .map(ImageIO.read)
+      .toSeq
 
-    val videoPath = "stitch-assets/balcony.mp4"
-    val frameFolder = generateVideoFrames(videoPath)
-
-    generateStitchedImages(frameFolder, width, height)
-  }
-
-  def generateVideoFrames( videoPath: String ): String = {
-    //generate frames using ffmpeg (because build and other tools are fucked)
-    print("generating video frames...")
-    val frameFolder = "video-frames"
-    new ProcessBuilder("mkdir", frameFolder).start().waitFor()
-    val pb = new ProcessBuilder("ffmpeg", "-i", videoPath, frameFolder + "/image-%07d.png")
-    val p = pb.start().waitFor()
-    println(" done")
-    frameFolder
-  }
-
-  def generateStitchedImages( frameFolder: String, width: Int, height: Int): Unit = {
-
-    val outputFolder = "stitched-video-frames"
-    new ProcessBuilder("mkdir", outputFolder).start().waitFor()
-
-    // figure out how many frames were generated
-    val numFrames = new File(frameFolder).listFiles().length
-    val lookDistance = 150
-    val jumpDistance = 25
-    val spicyCurry = stitchFrame(width, height, lookDistance, jumpDistance, frameFolder, numFrames)(_)
-    for (i <- 1 to numFrames) { // TODO: probably should do some smart functional mapping stuff here
-      println("stitching frame " + i + "...")
-      ImageIO.write(spicyCurry(i), "png", new File(outputFolder + "/image-%07d.png".format(i)))
-//      println(" done")
-    }
-  }
-
-  def stitchFrame( width: Int, height: Int, lookDistance: Int, jumpDistance: Int, frameFolder: String, numFrames: Int )( frameIndex: Int ): BufferedImage = {
-    val nakedFrame = ImageIO.read(new File(frameFolder + "/image-%07d.png".format(frameIndex)))
-    var blackBarred = getSizedFrame(nakedFrame, width, height)
-
-    // make the screen wider than necessary for extra descriptors
-    val wideSize = 4000
-    var wideFrame = new BufferedImage(wideSize, wideSize, blackBarred.getType())
-    wideFrame.createGraphics().drawImage(blackBarred, (wideSize - height) / 2, (wideSize - width) / 2, width, height, null)
-
-    val backward = ListBuffer[Homography2D_F64]()
-    val forward = ListBuffer[Homography2D_F64]()
-
-    // Setup the interest point descriptor, associator, and matcher.
-    val descriptor = FactoryDetectDescribe.surfStable(new ConfigFastHessian(1, 2, 200, 1, 9, 4, 4), null, null, classOf[GrayF32])
-    val associator = FactoryAssociation.greedy(FactoryAssociation.scoreEuclidean(classOf[BrightFeature], true), 2, true)
-    val matcher = FactoryMultiViewRobust.homographyRansac(null, new ConfigRansac(60, 3))
-    val greenCurry = computeHomography(descriptor, associator, matcher)( _,_ )
-
-    for (i <- jumpDistance to lookDistance by jumpDistance) {
-      if (frameIndex - i > 0) {
-        val further = ImageIO.read(new File(frameFolder + "/image-%07d.png".format(frameIndex - i)))
-        var closer = ImageIO.read(new File(frameFolder + "/image-%07d.png".format(frameIndex - i + jumpDistance))) // this code is ugly
-        if (i == jumpDistance) {
-          closer = wideFrame
-        }
-        backward += greenCurry(closer, further)
-      }
-      if (frameIndex + i <= numFrames) {
-        val further = ImageIO.read(new File(frameFolder + "/image-%07d.png".format(frameIndex + i)))
-        var closer = ImageIO.read(new File(frameFolder + "/image-%07d.png".format(frameIndex + i - jumpDistance))) // this is also ugly
-        if (i == jumpDistance) {
-          closer = wideFrame
-        }
-        forward += greenCurry(closer, further)
-      }
+    // Stitch together the frames and write to file in parallel.
+    val stitched = frames.zipWithIndex.par.foreach { case (f, i) =>
+      val before = ((i - jump) to (0 max (i - look)) by -jump).map(frames).reverse
+      val after  = ((i + jump) to (frames.length min (i + look)) by jump).map(frames)
+      ImageIO.write(stitch(size)(f, before, after), "png", new File(dir + "/stitched-%07d.png".format(i)))
     }
 
-    // Setup the rendering toolchain.
-    val model = new PixelTransformHomography_F32
-    val interpolater = FactoryInterpolation.bilinearPixelS(classOf[GrayF32], BorderType.ZERO)
-    val distortion = DistortSupport.createDistortPL(classOf[GrayF32], model, interpolater, false)
-    distortion.setRenderAll(false)
-
-    for (i <- backward.length - 1 to 0 by -1) {
-      var homo = backward(0)
-      for (j <- 1 to i) {
-        homo = homo.concat(backward(j), null)
-      }
-//      print(" " + (frameIndex - (i * jumpDistance)))
-      val colorMain = ConvertBufferedImage.convertFromMulti(wideFrame, null, true, classOf[GrayF32])
-      val colorCurrent = ConvertBufferedImage.convertFromMulti(ImageIO.read(new File(frameFolder + "/image-%07d.png".format(frameIndex - ((i+1) * jumpDistance)))), null, true, classOf[GrayF32])
-      model.set(homo)
-      distortion.apply(colorCurrent, colorMain)
-
-      wideFrame = ConvertBufferedImage.convertTo(colorMain, new BufferedImage(colorMain.width, colorMain.height, wideFrame.getType()), true)
-    }
-
-    for (i <- forward.length - 1 to 0 by -1) {
-      var homo = forward(0)
-      for (j <- 1 to i) {
-        homo = homo.concat(forward(j), null)
-      }
-//      print(" " + (frameIndex + (i * jumpDistance)))
-      val colorMain = ConvertBufferedImage.convertFromMulti(wideFrame, null, true, classOf[GrayF32])
-      val colorCurrent = ConvertBufferedImage.convertFromMulti(ImageIO.read(new File(frameFolder + "/image-%07d.png".format(frameIndex + ((i+1) * jumpDistance)))), null, true, classOf[GrayF32])
-      model.set(homo)
-      distortion.apply(colorCurrent, colorMain)
-
-      wideFrame = ConvertBufferedImage.convertTo(colorMain, new BufferedImage(colorMain.width, colorMain.height, wideFrame.getType()), true)
-    }
-    val originalFrame = ImageIO.read(new File(frameFolder + "/image-%07.png"))
-    wideFrame.createGraphics()
-      .drawImage(originalFrame, (wideSize - height) / 2, (wideSize - width) / 2, width, height, null) // paste the original image on top
-    wideFrame.getSubimage((wideSize - height) / 2, (wideSize - width) / 2, width, height)
-  }
-
-  def getSizedFrame( frame: BufferedImage, width: Int, height: Int): BufferedImage = {
-    // TODO: don't assume that the black bars are on the side (safe assumption though)
-    var scaledWidth = Math.floor((height.toDouble / frame.getHeight()) * frame.getWidth()).toInt
-
-    var resized = new BufferedImage(scaledWidth, height, BufferedImage.TYPE_INT_RGB)
-    resized.createGraphics().drawImage(frame, 0, 0, scaledWidth, height, null)
-
-    var wideFrame = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
-    val offset = (width - resized.getWidth()).toDouble / 2
-    wideFrame.createGraphics().drawImage(resized, offset.toInt, 0, resized.getWidth(), resized.getHeight(), null)
-    wideFrame
-  }
-
-  def doHomography( currentFrame: BufferedImage, frameFolder: String )( stitchIndex: Int ): BufferedImage = {
-    // TODO: tweak this later to be better
-    // Setup the interest point descriptor, associator, and matcher.
-    val descriptor = FactoryDetectDescribe.surfStable(new ConfigFastHessian(1, 2, 200, 1, 9, 4, 4), null, null, classOf[GrayF32])
-    val associator = FactoryAssociation.greedy(FactoryAssociation.scoreEuclidean(classOf[BrightFeature], true), 2, true)
-    val matcher = FactoryMultiViewRobust.homographyRansac(null, new ConfigRansac(60, 3))
-
-    // Setup the rendering toolchain.
-    val model = new PixelTransformHomography_F32
-    val interpolater = FactoryInterpolation.bilinearPixelS(classOf[GrayF32], BorderType.ZERO)
-    val distortion = DistortSupport.createDistortPL(classOf[GrayF32], model, interpolater, false)
-    distortion.setRenderAll(false)
-
-    val otherImage = ImageIO.read(new File(frameFolder + "/image-%07d.png".format(stitchIndex + 1)))
-
-    // do the homography
-    val inputMain = ConvertBufferedImage.convertFromSingle(currentFrame, null, classOf[GrayF32])
-    val inputOther = ConvertBufferedImage.convertFromSingle(otherImage, null, classOf[GrayF32])
-
-    val colorMain = ConvertBufferedImage.convertFromMulti(currentFrame, null, true, classOf[GrayF32])
-    val colorOther = ConvertBufferedImage.convertFromMulti(otherImage, null, true, classOf[GrayF32])
-
-    val other2Main = homography(descriptor, associator, matcher)(inputMain, inputOther)
-
-    model.set(other2Main)
-    distortion.apply(colorOther, colorMain)
-
-    val stitched = new BufferedImage(colorMain.width, colorMain.height, currentFrame.getType())
-    ConvertBufferedImage.convertTo(colorMain, stitched, true)
-  }
-
-  def computeHomography( descriptor: DetectDescribePoint[GrayF32, BrightFeature], associator: AssociateDescription[BrightFeature], matcher: ModelMatcher[Homography2D_F64, AssociatedPair] )
-                       ( mainFrame: BufferedImage, otherFrame: BufferedImage ): Homography2D_F64 = {
-    // Setup the rendering toolchain.
-    val model = new PixelTransformHomography_F32
-    val interpolater = FactoryInterpolation.bilinearPixelS(classOf[GrayF32], BorderType.ZERO)
-    val distortion = DistortSupport.createDistortPL(classOf[GrayF32], model, interpolater, false)
-    distortion.setRenderAll(false)
-
-    // compute
-    val inputMain = ConvertBufferedImage.convertFromSingle(mainFrame, null, classOf[GrayF32])
-    val inputOther = ConvertBufferedImage.convertFromSingle(otherFrame, null, classOf[GrayF32])
-
-    val colorMain = ConvertBufferedImage.convertFromMulti(mainFrame, null, true, classOf[GrayF32])
-    val colorOther = ConvertBufferedImage.convertFromMulti(otherFrame, null, true, classOf[GrayF32])
-
-    homography(descriptor, associator, matcher)(inputMain, inputOther)
+    // Generate a video from the stitched images.
+    ffmpeg(dir + "/stitched-%07d.png", output)
+    new File(dir).delete()
   }
 
   /**
-    *
-    * @param inputA
-    * @param inputB
-    * @param descriptor
-    * @param associator
-    * @param matcher
-    * @return
-    */
+   * Calls ffmpeg to either (1) extract frames from a video or (2) generate a video from frames.
+   * Each function is called by swapping the input and output parameters.
+   *
+   * @param input Input data.
+   * @param output Output location.
+   */
+  def ffmpeg(input: String, output: String): Unit = {
+    new ProcessBuilder("mkdir", output).start().waitFor()
+    val pb = new ProcessBuilder("ffmpeg", "-i", input, output)
+    pb.start().waitFor()
+  }
+
+  /**
+   * Returns an image of the provided dimensions that is generated by stitched the provided before
+   * and after frames to the original frame. Before frames are specified in ascending order of time
+   * and after frames are specified in descending order of time; therefore, the first before frame
+   * is the oldest and the last after frame is the latest.
+   *
+   * @param size Dimensions of stitched image.
+   * @param original Original frame.
+   * @param before Frames before the original.
+   * @param after Frames after the original.
+   * @return Stitched image of the provided dimensions.
+   */
+  def stitch(
+    size: Dimension
+  )(
+    original: BufferedImage,
+    before: Seq[BufferedImage],
+    after: Seq[BufferedImage]
+  ): BufferedImage = {
+    // Construct the working image. We use a significantly larger working image than the desired
+    // dimensions of the output image, because otherwise there aren't enough descriptors to perform
+    // matching for frames near the extreme edges.
+    var working = new BufferedImage(size.width * 2, size.height * 2, original.getType)
+    draw(working, original, size)
+
+    // Setup the rendering toolchain.
+    val model = new PixelTransformHomography_F32
+    val interpolater = FactoryInterpolation.bilinearPixelS(classOf[GrayF32], BorderType.ZERO)
+    val distortion = DistortSupport.createDistortPL(classOf[GrayF32], model, interpolater, false)
+    distortion.setRenderAll(false)
+
+    // Calculate the transformations between each frames and the original.
+    val backward = transform(working, before)
+    val forward = transform(working, after.reverse).reverse
+
+    // Zip together the backwards and forwards transformations to produce a sequence of
+    // transformations that correspond to an offset of -1, 1, -2, 2, etc. from the original frame.
+    val transformations = before.zip(backward).map(Seq(_))
+      .zipAll(after.zip(forward).map(Seq(_)), Seq.empty, Seq.empty)
+      .flatMap { case (a, b) => a ++ b }
+      .reverse
+
+    // Apply the transformations in reverse time-order to ensure that the nearest frames to the
+    // original are applied first. Render each transformation to the underlying working copy.
+    transformations.reverse.foreach { case (f, h) =>
+      val color = ConvertBufferedImage.convertFromMulti(working, null, true, classOf[GrayF32])
+      val frame = ConvertBufferedImage.convertFromMulti(f, null, true, classOf[GrayF32])
+
+      model.set(h)
+      distortion.apply(frame, color)
+      working = ConvertBufferedImage.convertTo(color, new BufferedImage(color.width, color.height, working.getType), true)
+    }
+
+    // Draw the original frame back onto the working image.
+    draw(working, original, size)
+
+    // Extract the sub-image of the desired dimension from the working image.
+    val dx = (working.getWidth - size.width) / 2
+    val dy = (working.getHeight - size.height) / 2
+    working.getSubimage(dx, dy, size.width, size.height)
+  }
+
+  /**
+   * Scales the image to the provided dimensions, while preserving aspect ratio, and then draws the
+   * resized image in the center of the provided canvas.
+   *
+   * @param canvas Image to draw on.
+   * @param image Image to draw.
+   * @param size Scaled dimensions of image.
+   */
+  def draw(
+    canvas: BufferedImage,
+    image: BufferedImage,
+    size: Dimension
+  ): Unit = {
+    // Calculate the width, height, and aspect ratio of the image.
+    val w = image.getWidth
+    val h = image.getHeight
+    val r = w / h.toDouble
+    val graphics = canvas.getGraphics
+
+    // Resize the image while preserving aspect ratio.
+    if (h > w) {
+      val width = (size.getHeight * r).toInt
+      val dx = (canvas.getWidth - width) / 2
+      val dy = (canvas.getHeight - size.height) / 2
+      graphics.drawImage(image, dx, dy, dx + width, dy + size.height, 0, 0, w, h, null)
+    } else {
+      val height = (size.getWidth / r).toInt
+      val dx = (canvas.getWidth - size.width) / 2
+      val dy = (canvas.getHeight - height) / 2
+      graphics.drawImage(image, dx, dy, dx + size.width, dy + size.height, 0, 0, w, h, null)
+    }
+
+    // Cleanup the graphics instance.
+    graphics.dispose()
+  }
+
+  /**
+   * Returns a sequence of homographies that map each preceding frame to the current frame.
+   * Preceding frames are specified in ascending order of time, culminating in the current frame;
+   * therefore, the first frame in the sequence is the oldest and the last is the latest.
+   * Homographies are first calculated between adjacent frames, and then are concatenated together.
+   *
+   * @param current Current frame.
+   * @param preceding Preceding frames.
+   * @return Sequence of homographies that transform preceding frames to the current.
+   */
+  def transform(
+    current: BufferedImage,
+    preceding: Seq[BufferedImage]
+  ): Seq[Homography2D_F64] = {
+    // Setup the transformation toolchain.
+    val descriptor = FactoryDetectDescribe.surfStable(new ConfigFastHessian(1, 2, 200, 1, 9, 4, 4), null, null, classOf[GrayF32])
+    val associator = FactoryAssociation.greedy(FactoryAssociation.scoreEuclidean(classOf[BrightFeature], true), 2, true)
+    val matcher = FactoryMultiViewRobust.homographyRansac(null, new ConfigRansac(60, 3))
+
+    // Calculate the homographies between adjacent frames.
+    val homographies = (preceding :+ current)
+      .map(ConvertBufferedImage.convertFromSingle(_, null, classOf[GrayF32]))
+      .sliding(2)
+      .map(x => homography(descriptor, associator, matcher)(x.last, x.head))
+      .toSeq
+
+    // Concatenate homographies to find absolute transformations between frames and the original.
+    val id = new Homography2D_F64(1, 0, 0, 0, 1, 0, 0, 0, 1)
+    homographies.scanRight(id)((l, r) => r.concat(l, null)).take(preceding.length)
+  }
+
+  /**
+   * Returns a homography from image B to A. Utilizes the provided detection algorithm to find
+   * interest points, the provided association algorithm to group them, and the provided matching
+   * model to determine the homography.
+   *
+   * @param descriptor Detection algorithm.
+   * @param associator Association algorithm.
+   * @param matcher Matching algorithm.
+   * @param inputA First input image.
+   * @param inputB Second input image.
+   * @return Homography from image B to image A.
+   */
   def homography(
-                  descriptor: DetectDescribePoint[GrayF32, BrightFeature],
-                  associator: AssociateDescription[BrightFeature],
-                  matcher: ModelMatcher[Homography2D_F64, AssociatedPair]
-                )(
-                  inputA: GrayF32,
-                  inputB: GrayF32
-                ): Homography2D_F64 = {
-    // Locate a matching between the interest points of the images.
+    descriptor: DetectDescribePoint[GrayF32, BrightFeature],
+    associator: AssociateDescription[BrightFeature],
+    matcher: ModelMatcher[Homography2D_F64, AssociatedPair]
+  )(
+    inputA: GrayF32,
+    inputB: GrayF32
+  ): Homography2D_F64 = {
+    // Locate a matching between the interest points of both images.
     val (pointsA, descA) = describe(descriptor)(inputA)
     val (pointsB, descB) = describe(descriptor)(inputB)
-    val matches = matching(associator)(descA, descB)
+
+    associator.setSource(descA)
+    associator.setDestination(descB)
+    associator.associate()
+    val matches = associator.getMatches
 
     // Construct an association between points.
     val pairs = mutable.Buffer.empty[AssociatedPair]
@@ -242,18 +236,21 @@ object Stitcher {
     }
 
     // Attempt to construct the homography.
-    if (!matcher.process(pairs.asJava))
+    if(!matcher.process(pairs.asJava))
       throw new RuntimeException("Unable to determine homography.")
     else
       matcher.getModelParameters.copy()
   }
 
   /**
-    *
-    * @param detector
-    * @param input
-    * @return
-    */
+   * Returns a tuple containing the location and descriptions of the various interest points in the
+   * provided image. Interest points are found using the provided detection algorithm. Location and
+   * description indices correspond.
+   *
+   * @param detector Detection algorithm.
+   * @param input Input image.
+   * @return Location and description of interest points.
+   */
   def describe(
     detector: DetectDescribePoint[GrayF32, BrightFeature]
   )(
@@ -269,27 +266,6 @@ object Stitcher {
     }
 
     (points, descriptors)
-  }
-
-  /**
-   * Returns a matching between the provided collections of feature descriptors. Utilizes the
-   * provided associator to match descriptors.
-   *
-   * @param descriptorsA Descriptors in first image.
-   * @param descriptorsB Descriptors in second image.
-   * @tparam D Type of descriptors.
-   * @return
-   */
-  def matching[D <: TupleDesc_F64](
-    associator: AssociateDescription[D]
-  )(
-    descriptorsA: FastQueue[D],
-    descriptorsB: FastQueue[D]
-  ): FastQueue[AssociatedIndex] = {
-    associator.setSource(descriptorsA)
-    associator.setDestination(descriptorsB)
-    associator.associate()
-    associator.getMatches
   }
 
 }
