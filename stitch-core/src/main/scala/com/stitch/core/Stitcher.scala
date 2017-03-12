@@ -39,12 +39,12 @@ object Stitcher {
   def main(args: Array[String]): Unit = {
 
     // generate individual frames on disk
-    // stitch them together given video dimensionsc
+    // stitch them together given video dimensions
 
     val width = 1920
     val height = 1080
 
-    val videoPath = "stitch-assets/axis-allies.mp4"
+    val videoPath = "stitch-assets/balcony.mp4"
     val frameFolder = generateVideoFrames(videoPath)
 
     generateStitchedImages(frameFolder, width, height)
@@ -56,8 +56,8 @@ object Stitcher {
     val frameFolder = "video-frames"
 //    new ProcessBuilder("mkdir", frameFolder).start().waitFor()
 //    val pb = new ProcessBuilder("ffmpeg", "-i", videoPath, frameFolder + "/image-%07d.png")
-//    val p = pb.start().waitFor()
-    println("done")
+//    val p = pb.start().waitForh b zr e()
+    println(" done")
     frameFolder
   }
 
@@ -69,12 +69,12 @@ object Stitcher {
     // figure out how many frames were generated
     val numFrames = new File(frameFolder).listFiles().length
     val lookDistance = 150
-    val jumpDistance = 50
+    val jumpDistance = 25
     val spicyCurry = stitchFrame(width, height, lookDistance, jumpDistance, frameFolder, numFrames)(_)
-    for (i <- 100 to 100) { // TODO: probably should do some smart functional mapping stuff here
-      print("stitching frame " + i + "...")
+    for (i <- 1 to numFrames) { // TODO: probably should do some smart functional mapping stuff here
+      println("stitching frame " + i + "...")
       ImageIO.write(spicyCurry(i), "png", new File(outputFolder + "/image-%07d.png".format(i)))
-      println("done")
+//      println(" done")
     }
   }
 
@@ -87,16 +87,114 @@ object Stitcher {
     var wideFrame = new BufferedImage(wideSize, wideSize, blackBarred.getType())
     wideFrame.createGraphics().drawImage(blackBarred, (wideSize - height) / 2, (wideSize - width) / 2, width, height, null)
 
-//    val redCurry = doHomography(blackBarred) // CAN I DO THIS???
-    for (i <- jumpDistance to lookDistance by jumpDistance) { // TODO: do some cool functional mapping here too
-      if (frameIndex + i <= numFrames) {
-        wideFrame = doHomography(wideFrame, frameFolder)(frameIndex + i)
-      }
+    val backward = ListBuffer[Homography2D_F64]()
+    val forward = ListBuffer[Homography2D_F64]()
+
+    // Setup the interest point descriptor, associator, and matcher.
+    val descriptor = FactoryDetectDescribe.surfStable(new ConfigFastHessian(1, 2, 200, 1, 9, 4, 4), null, null, classOf[GrayF32])
+    val associator = FactoryAssociation.greedy(FactoryAssociation.scoreEuclidean(classOf[BrightFeature], true), 2, true)
+    val matcher = FactoryMultiViewRobust.homographyRansac(null, new ConfigRansac(60, 3))
+    val greenCurry = computeHomography(descriptor, associator, matcher)( _,_ )
+
+    for (i <- jumpDistance to lookDistance by jumpDistance) {
       if (frameIndex - i > 0) {
-        blackBarred = doHomography(blackBarred, frameFolder)(frameIndex - i)
+        val further = ImageIO.read(new File(frameFolder + "/image-%07d.png".format(frameIndex - i)))
+        var closer = ImageIO.read(new File(frameFolder + "/image-%07d.png".format(frameIndex - i + jumpDistance))) // this code is ugly
+        if (i == jumpDistance) {
+          closer = wideFrame
+        }
+        backward += greenCurry(closer, further)
+      }
+      if (frameIndex + i <= numFrames) {
+        val further = ImageIO.read(new File(frameFolder + "/image-%07d.png".format(frameIndex + i)))
+        var closer = ImageIO.read(new File(frameFolder + "/image-%07d.png".format(frameIndex + i - jumpDistance))) // this is also ugly
+        if (i == jumpDistance) {
+          closer = wideFrame
+        }
+        forward += greenCurry(closer, further)
       }
     }
-    wideFrame
+
+    // Setup the rendering toolchain.
+    val model = new PixelTransformHomography_F32
+    val interpolater = FactoryInterpolation.bilinearPixelS(classOf[GrayF32], BorderType.ZERO)
+    val distortion = DistortSupport.createDistortPL(classOf[GrayF32], model, interpolater, false)
+    distortion.setRenderAll(false)
+
+    for (i <- backward.length - 1 to 0 by -1) {
+      var homo = backward(0)
+      for (j <- 1 to i) {
+        homo = homo.concat(backward(j), null)
+      }
+//      print(" " + (frameIndex - (i * jumpDistance)))
+      val colorMain = ConvertBufferedImage.convertFromMulti(wideFrame, null, true, classOf[GrayF32])
+      val colorCurrent = ConvertBufferedImage.convertFromMulti(ImageIO.read(new File(frameFolder + "/image-%07d.png".format(frameIndex - ((i+1) * jumpDistance)))), null, true, classOf[GrayF32])
+      model.set(homo)
+      distortion.apply(colorCurrent, colorMain)
+
+      wideFrame = ConvertBufferedImage.convertTo(colorMain, new BufferedImage(colorMain.width, colorMain.height, wideFrame.getType()), true)
+    }
+
+    for (i <- forward.length - 1 to 0 by -1) {
+      var homo = forward(0)
+      for (j <- 1 to i) {
+        homo = homo.concat(forward(j), null)
+      }
+//      print(" " + (frameIndex + (i * jumpDistance)))
+      val colorMain = ConvertBufferedImage.convertFromMulti(wideFrame, null, true, classOf[GrayF32])
+      val colorCurrent = ConvertBufferedImage.convertFromMulti(ImageIO.read(new File(frameFolder + "/image-%07d.png".format(frameIndex + ((i+1) * jumpDistance)))), null, true, classOf[GrayF32])
+      model.set(homo)
+      distortion.apply(colorCurrent, colorMain)
+
+      wideFrame = ConvertBufferedImage.convertTo(colorMain, new BufferedImage(colorMain.width, colorMain.height, wideFrame.getType()), true)
+    }
+    val originalFrame = ImageIO.read(new File(frameFolder + "/image-%07.png"))
+    wideFrame.createGraphics()
+      .drawImage(originalFrame, (wideSize - height) / 2, (wideSize - width) / 2, width, height, null) // paste the original image on top
+    wideFrame.getSubimage((wideSize - height) / 2, (wideSize - width) / 2, width, height)
+
+//    val twoBack = ImageIO.read(new File("video-frames/image-0000180.png"))
+//    val oneBack = ImageIO.read(new File("video-frames/image-0000200.png"))
+//
+//    // do the homography
+//    val inputMain = ConvertBufferedImage.convertFromSingle(wideFrame, null, classOf[GrayF32])
+//    val inputA = ConvertBufferedImage.convertFromSingle(twoBack, null, classOf[GrayF32])
+//    val inputB = ConvertBufferedImage.convertFromSingle(oneBack, null, classOf[GrayF32])
+//
+//    val colorMain = ConvertBufferedImage.convertFromMulti(wideFrame, null, true, classOf[GrayF32])
+//    val colorA = ConvertBufferedImage.convertFromMulti(twoBack, null, true, classOf[GrayF32])
+//    val colorB = ConvertBufferedImage.convertFromMulti(oneBack, null, true, classOf[GrayF32])
+//
+//    val b2a = fuck(oneBack, twoBack)
+//    val main2b = fuck(wideFrame, oneBack)
+//
+//    // Setup the rendering toolchain.
+//    val model = new PixelTransformHomography_F32
+//    val interpolater = FactoryInterpolation.bilinearPixelS(classOf[GrayF32], BorderType.ZERO)
+//    val distortion = DistortSupport.createDistortPL(classOf[GrayF32], model, interpolater, false)
+//    distortion.setRenderAll(false)
+//
+//    val main2a = main2b.concat(b2a, null)
+//    model.set(main2b)
+//    distortion.apply(colorB, colorMain)
+//    model.set(main2a)
+//    distortion.apply(colorA, colorMain)
+//
+//    val stitched = new BufferedImage(colorMain.width, colorMain.height, wideFrame.getType())
+//    ConvertBufferedImage.convertTo(colorMain, stitched, true)
+
+//    doHomography( wideFrame, frameFolder )( 180 )
+
+//    val redCurry = doHomography(blackBarred) // CAN I DO THIS???
+//    for (i <- jumpDistance to lookDistance by jumpDistance) { // TODO: do some cool functional mapping here too
+//      if (frameIndex + i <= numFrames) {
+//        wideFrame = doHomography(wideFrame, frameFolder)(frameIndex + i)
+//      }
+////      if (frameIndex - i > 0) {
+////        wideFrame = doHomography(wideFrame, frameFolder)(frameIndex - i)
+////      }
+//    }
+//    wideFrame
   }
 
   def getSizedFrame( frame: BufferedImage, width: Int, height: Int): BufferedImage = {
@@ -141,6 +239,24 @@ object Stitcher {
 
     val stitched = new BufferedImage(colorMain.width, colorMain.height, currentFrame.getType())
     ConvertBufferedImage.convertTo(colorMain, stitched, true)
+  }
+
+  def computeHomography( descriptor: DetectDescribePoint[GrayF32, BrightFeature], associator: AssociateDescription[BrightFeature], matcher: ModelMatcher[Homography2D_F64, AssociatedPair] )
+                       ( mainFrame: BufferedImage, otherFrame: BufferedImage ): Homography2D_F64 = {
+    // Setup the rendering toolchain.
+    val model = new PixelTransformHomography_F32
+    val interpolater = FactoryInterpolation.bilinearPixelS(classOf[GrayF32], BorderType.ZERO)
+    val distortion = DistortSupport.createDistortPL(classOf[GrayF32], model, interpolater, false)
+    distortion.setRenderAll(false)
+
+    // compute
+    val inputMain = ConvertBufferedImage.convertFromSingle(mainFrame, null, classOf[GrayF32])
+    val inputOther = ConvertBufferedImage.convertFromSingle(otherFrame, null, classOf[GrayF32])
+
+    val colorMain = ConvertBufferedImage.convertFromMulti(mainFrame, null, true, classOf[GrayF32])
+    val colorOther = ConvertBufferedImage.convertFromMulti(otherFrame, null, true, classOf[GrayF32])
+
+    homography(descriptor, associator, matcher)(inputMain, inputOther)
   }
 
   def stitchFrame(

@@ -15,3 +15,4 @@ dist
 # output
 video-frames/
 stitched-video-frames/
+demo-stitched-video-frames/
