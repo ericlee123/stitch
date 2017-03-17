@@ -31,36 +31,43 @@ object Stitcher {
   def main(args: Array[String]): Unit = {
     // Input parameters.
     val size   = new Dimension(1920, 1080)
-    val video  = "stitch-assets/axis-allies.mp4"
-//    val dir    = "/Users/ashwin/Downloads/stitcher"
-    val dir = "stitch-assets/video-frames"
+    val video  = "stitch-assets/balcony.mp4"
+//    val dir    = "/Users/ashwin/Downloads/stitcher" // Ashwin's computer
+    val dir = "stitch-assets/video-frames" // Eric's setup
     val output = "stitch-assets/balcony-stitched.mp4"
-    val look   = 150
-    val jump   = 25
+    val look   = 22
+    val jump   = 20
 
     // Extract frames from the video using ffmpeg.
-    ffmpeg(video, dir + "/frame-%07d.png")
+//    ffmpeg(video, dir + "/frame-%07d.png")
 
     println("ffmpeg done")
 
-    // Load all the extracted frames.
+    // Load all the extracted frames. TODO: what if the video is too large for memory?
     val frames = new File(dir)
       .listFiles(f => f.getName.matches("frame-[0-9]+.png"))
       .map(ImageIO.read)
       .toSeq
 
-    println("load frames done")
+    println("done loading frames")
+
+
 
     // Stitch together the frames and write to file in parallel.
-    val stitched = frames.zipWithIndex.par.foreach { case (f, i) =>
+    val stitched = frames.zipWithIndex.par.foreach { case (f, i) => // readd par before foreach
       val before = ((i - jump) to (0 max (i - look)) by -jump).map(frames).reverse
-      val after  = ((i + jump) to (frames.length min (i + look)) by jump).map(frames)
+      val after  = ((i + jump) to (frames.length-1 min (i + look)) by jump).map(frames)
       ImageIO.write(stitch(size)(f, before, after), "png", new File(dir + "/stitched-%07d.png".format(i)))
+      println(i)
     }
 
     // Generate a video from the stitched images.
-    ffmpeg(dir + "/stitched-%07d.png", output)
+//    ffmpeg(dir + "/stitched-%07d.png", output)
 //    new File(dir).delete() // comment out to inspect stitched frames
+  }
+
+  def outputImage(image: BufferedImage): Unit = {
+    ImageIO.write(image, "png", new File("output.png"))
   }
 
   /**
@@ -71,7 +78,7 @@ object Stitcher {
    * @param output Output location.
    */
   def ffmpeg(input: String, output: String): Unit = {
-    new ProcessBuilder("mkdir", output).start().waitFor() // TODO: huh? (kind of messy I guess)
+    new ProcessBuilder("mkdir", "-p", output).start().waitFor() // TODO: huh? (kind of messy I guess)
     val pb = new ProcessBuilder("ffmpeg", "-i", input, output)
     pb.start().waitFor() // TODO: check for error code (make folder first)
   }
@@ -268,6 +275,7 @@ object Stitcher {
     (0 until detector.getNumberOfFeatures) foreach { i =>
       points += detector.getLocation(i).copy()
       descriptors.grow().setTo(detector.getDescription(i))
+//      descriptors.add(detector.getDescription(i))
     }
 
     (points, descriptors)
