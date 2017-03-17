@@ -29,29 +29,29 @@ import javax.imageio.ImageIO
 object Stitcher {
 
   def main(args: Array[String]): Unit = {
+
     // Input parameters.
     val size   = new Dimension(1920, 1080)
-    val video  = "stitch-assets/balcony.mp4"
+    val video  = "stitch-assets/axis-allies.mp4"
 //    val dir    = "/Users/ashwin/Downloads/stitcher" // Ashwin's computer
     val dir = "stitch-assets/video-frames" // Eric's setup
-    val output = "stitch-assets/balcony-stitched.mp4"
-    val look   = 22
+    val output = "stitch-assets/aa-stitched.mp4"
+    val look   = 70
     val jump   = 20
 
     // Extract frames from the video using ffmpeg.
-//    ffmpeg(video, dir + "/frame-%07d.png")
+    ffmpeg(video, dir + "/frame-%07d.png")
 
     println("ffmpeg done")
 
     // Load all the extracted frames. TODO: what if the video is too large for memory?
     val frames = new File(dir)
       .listFiles(f => f.getName.matches("frame-[0-9]+.png"))
+      .sortWith(_.getName < _.getName)
       .map(ImageIO.read)
       .toSeq
 
     println("done loading frames")
-
-
 
     // Stitch together the frames and write to file in parallel.
     val stitched = frames.zipWithIndex.par.foreach { case (f, i) => // readd par before foreach
@@ -62,12 +62,8 @@ object Stitcher {
     }
 
     // Generate a video from the stitched images.
-//    ffmpeg(dir + "/stitched-%07d.png", output)
-//    new File(dir).delete() // comment out to inspect stitched frames
-  }
-
-  def outputImage(image: BufferedImage): Unit = {
-    ImageIO.write(image, "png", new File("output.png"))
+    ffmpeg(dir + "/stitched-%07d.png", output)
+    new File(dir).delete() // comment out to inspect stitched frames
   }
 
   /**
@@ -275,7 +271,6 @@ object Stitcher {
     (0 until detector.getNumberOfFeatures) foreach { i =>
       points += detector.getLocation(i).copy()
       descriptors.grow().setTo(detector.getDescription(i))
-//      descriptors.add(detector.getDescription(i))
     }
 
     (points, descriptors)
