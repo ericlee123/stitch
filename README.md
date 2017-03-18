@@ -12,3 +12,5 @@ Fixing vertical video bars.
   - JVM with 4GB heap space was not enough to load ~750 frames
 - do not preserve aspect ratio, simply use the dimensions provided by the user
   - crop if necessary
+- calculate every homography all at once and then concatenate them for applying actual transformations
+- have some sort of cache like system to store relevant frames in memory

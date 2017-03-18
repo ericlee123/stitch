@@ -32,38 +32,106 @@ object Stitcher {
 
     // Input parameters.
     val size   = new Dimension(1920, 1080)
-    val video  = "stitch-assets/axis-allies.mp4"
+    val video  = "stitch-assets/balcony.mp4"
 //    val dir    = "/Users/ashwin/Downloads/stitcher" // Ashwin's computer
     val dir = "stitch-assets/video-frames" // Eric's setup
-    val output = "stitch-assets/aa-stitched.mp4"
-    val look   = 70
+    val output = "stitch-assets/balcony-stitched.mp4"
+    val look   = 300
+    val jump   = 25
+
+//    // Extract frames from the video using ffmpeg.
+//    ffmpeg(video, dir + "/frame-%07d.png")
+//    println("done splitting video into individual frames")
+
+    val frameFiles = new File(dir).listFiles(f => f.getName.matches("frame-[0-9]+.png")).sortWith(_.getName < _.getName)
+
+    val numFrames = frameFiles.length
+    val frameSpace = frameFiles.length
+    val capacity = 200 // TODO: use Runtime to determine how many images to read in at a time
+
+    var homographies = Seq[Homography2D_F64]()
+    var nextFrame = 0
+    while (nextFrame < numFrames) {
+      println(nextFrame)
+      val frames = frameFiles
+        .slice(nextFrame, (nextFrame + capacity) min (numFrames - 1))
+        .map(ImageIO.read)
+        .toSeq
+
+      homographies = homographies ++ incrementalTransform(frames) // what is the best way to concat sequences? use another data structure?
+      nextFrame += capacity - 1
+    }
+
+//    // Load all the extracted frames. TODO: what if the video is too large for memory?
+//    val frames = new File(dir)
+//      .listFiles(f => f.getName.matches("frame-[0-9]+.png"))
+//      .sortWith(_.getName < _.getName)
+//      .map(ImageIO.read)
+//      .toSeq
+//
+//    println("done loading frames")
+//
+//    // Stitch together the frames and write to file in parallel.
+//    val stitched = frames.zipWithIndex.par.foreach { case (f, i) => // readd par before foreach
+//      val before = ((i - jump) to (0 max (i - look)) by -jump).map(frames).reverse
+//      val after  = ((i + jump) to (frames.length-1 min (i + look)) by jump).map(frames)
+//      ImageIO.write(stitch(size)(f, before, after), "png", new File(dir + "/stitched-%07d.png".format(i)))
+//      println(i)
+//    }
+//
+//    println("done generating stitched frames")
+//
+//    // Generate a video from the stitched images.
+//    ffmpeg(dir + "/stitched-%07d.png", output)
+//    new File(dir).delete() // comment out to inspect stitched frames
+  }
+
+  def play(): Unit = {
+    // Input parameters.
+    val size   = new Dimension(1920, 1080)
+    val video  = "stitch-assets/balcony.mp4"
+    //    val dir    = "/Users/ashwin/Downloads/stitcher" // Ashwin's computer
+    val dir = "stitch-assets/video-frames" // Eric's setup
+    val output = "stitch-assets/balcony-stitched.mp4"
+    val look   = 22
     val jump   = 20
 
-    // Extract frames from the video using ffmpeg.
-    ffmpeg(video, dir + "/frame-%07d.png")
+    val originalIndex = 220
+    val stitchIndex = 200
 
-    println("ffmpeg done")
-
-    // Load all the extracted frames. TODO: what if the video is too large for memory?
+    // This does not maintain (our) ordering of the frames we generated (BAD)
     val frames = new File(dir)
       .listFiles(f => f.getName.matches("frame-[0-9]+.png"))
       .sortWith(_.getName < _.getName)
       .map(ImageIO.read)
       .toSeq
 
-    println("done loading frames")
+    ImageIO.write(frames(200), "png", new File("stitch.png"))
+    ImageIO.write(frames(220), "png", new File("original.png"))
 
-    // Stitch together the frames and write to file in parallel.
-    val stitched = frames.zipWithIndex.par.foreach { case (f, i) => // readd par before foreach
-      val before = ((i - jump) to (0 max (i - look)) by -jump).map(frames).reverse
-      val after  = ((i + jump) to (frames.length-1 min (i + look)) by jump).map(frames)
-      ImageIO.write(stitch(size)(f, before, after), "png", new File(dir + "/stitched-%07d.png".format(i)))
-      println(i)
-    }
+    val before = frames(stitchIndex) :: Nil
+    var working = new BufferedImage(size.width * 2, size.height * 2, frames(originalIndex).getType)
+    draw(working, frames(originalIndex), size)
 
-    // Generate a video from the stitched images.
-    ffmpeg(dir + "/stitched-%07d.png", output)
-    new File(dir).delete() // comment out to inspect stitched frames
+    // Setup the rendering toolchain.
+    val model = new PixelTransformHomography_F32
+    val interpolater = FactoryInterpolation.bilinearPixelS(classOf[GrayF32], BorderType.ZERO)
+    val distortion = DistortSupport.createDistortPL(classOf[GrayF32], model, interpolater, false)
+    distortion.setRenderAll(false)
+
+    val backward = transform(working, before)
+
+    val color = ConvertBufferedImage.convertFromMulti(working, null, true, classOf[GrayF32])
+    val frame = ConvertBufferedImage.convertFromMulti(frames(stitchIndex), null, true, classOf[GrayF32])
+
+    model.set(backward(0))
+    distortion.apply(frame, color)
+
+    working = ConvertBufferedImage.convertTo(color, new BufferedImage(color.width, color.height, working.getType), true)
+
+    draw(working, frames(originalIndex), size)
+
+    ImageIO.write(working, "png", new File("output.png"))
   }
 
   /**
@@ -75,6 +143,7 @@ object Stitcher {
    */
   def ffmpeg(input: String, output: String): Unit = {
     new ProcessBuilder("mkdir", "-p", output).start().waitFor() // TODO: huh? (kind of messy I guess)
+    new ProcessBuilder("rm", "-r", output).start().waitFor()
     val pb = new ProcessBuilder("ffmpeg", "-i", input, output)
     pb.start().waitFor() // TODO: check for error code (make folder first)
   }
@@ -206,6 +275,25 @@ object Stitcher {
     // Concatenate homographies to find absolute transformations between frames and the original.
     val id = new Homography2D_F64(1, 0, 0, 0, 1, 0, 0, 0, 1)
     homographies.scanRight(id)((l, r) => r.concat(l, null)).take(preceding.length)
+  }
+
+  /**
+    * Takes in a sequence of consecutive frames and compute the homographies between each frame t and t+1.
+    * @param frames Frames from video.
+    * @return Sequence of homographies that transform frame t to t-1.
+    */
+  def incrementalTransform(
+    frames: Seq[BufferedImage]
+  ): Seq[Homography2D_F64] = {
+    val descriptor = FactoryDetectDescribe.surfStable(new ConfigFastHessian(1, 2, 200, 1, 9, 4, 4), null, null, classOf[GrayF32])
+    val associator = FactoryAssociation.greedy(FactoryAssociation.scoreEuclidean(classOf[BrightFeature], true), 2, true)
+    val matcher = FactoryMultiViewRobust.homographyRansac(null, new ConfigRansac(60, 3))
+
+    frames
+      .map(ConvertBufferedImage.convertFromSingle(_, null, classOf[GrayF32]))
+      .sliding(2)
+      .map(x => homography(descriptor, associator, matcher)(x.last, x.head))
+      .toSeq
   }
 
   /**
