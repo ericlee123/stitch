@@ -33,37 +33,129 @@ object Stitcher {
     // Input parameters.
     val size   = new Dimension(1920, 1080)
     val video  = "stitch-assets/balcony.mp4"
-//    val dir    = "/Users/ashwin/Downloads/stitcher" // Ashwin's computer
-    val dir = "stitch-assets/video-frames" // Eric's setup
+//    val dir    = "/Users/ashwin/Downloads/stitcher" // Ashwin
+    val dir = "stitch-assets/video-frames" // Eric
     val output = "stitch-assets/balcony-stitched.mp4"
     val look   = 300
     val jump   = 25
 
-//    // Extract frames from the video using ffmpeg.
-//    ffmpeg(video, dir + "/frame-%07d.png")
-//    println("done splitting video into individual frames")
+    // Extract frames from the video using ffmpeg.
+    ffmpeg(video, dir + "/frame-%07d.png")
+    println("done splitting video into individual frames")
 
+    // calculating all incremental homographies at once
     val frameFiles = new File(dir).listFiles(f => f.getName.matches("frame-[0-9]+.png")).sortWith(_.getName < _.getName)
-
     val numFrames = frameFiles.length
     val frameSpace = frameFiles.length
-    val capacity = 200 // TODO: use Runtime to determine how many images to read in at a time
+    val capacity = 50 // TODO: use Runtime to determine how many images to read in at a time
 
     var homographies = Seq[Homography2D_F64]()
     var nextFrame = 0
     while (nextFrame < numFrames) {
-      println(nextFrame)
+      println("homography progress " + nextFrame + " / " + (numFrames - 1))
       val frames = frameFiles
         .slice(nextFrame, (nextFrame + capacity) min (numFrames - 1))
         .map(ImageIO.read)
         .toSeq
 
-      homographies = homographies ++ incrementalTransform(frames) // what is the best way to concat sequences? use another data structure?
+      // TODO: find a way to parallelize
+      homographies = homographies ++ transform(frames) // what is the best way to concat sequences? use another data structure?
       nextFrame += capacity - 1
     }
+    println("done computing homographies")
+
+    // generate the frames
+    (0 to numFrames - 1).par foreach { i =>
+      println("stitching frame " + (i + 1))
+
+      // Setup the rendering toolchain. Put it in here because multithreading.
+      val model = new PixelTransformHomography_F32
+      val interpolater = FactoryInterpolation.bilinearPixelS(classOf[GrayF32], BorderType.ZERO)
+      val distortion = DistortSupport.createDistortPL(classOf[GrayF32], model, interpolater, false)
+      distortion.setRenderAll(false)
+
+      val currentFrame = ImageIO.read(new File(dir + "/frame-%07d.png".format(i + 1)))
+      var canvas = new BufferedImage(size.width * 2, size.height * 2, currentFrame.getType)
+      draw(canvas, currentFrame, size)
+
+      if (i > 0) {
+        val backOne = ImageIO.read(new File(dir + "/frame-%07d.png".format(i)))
+        var backT = transform(canvas, backOne)
+
+        homographies.zipWithIndex.slice((0 max (i - look)), i - 1).reverse.foreach { case (h, j) =>
+
+          backT = backT.concat(h.invert(null), null)
+
+          if ((i - j) % jump == 0 || j == 0) {
+            val otherFrame = ImageIO.read(new File(dir + "/frame-%07d.png".format(j + 1)))
+            val colorCurrent = ConvertBufferedImage.convertFromMulti(canvas, null, true, classOf[GrayF32])
+            val colorOther = ConvertBufferedImage.convertFromMulti(otherFrame, null, true, classOf[GrayF32])
+
+            model.set(backT)
+            distortion.apply(colorOther, colorCurrent)
+            canvas = ConvertBufferedImage.convertTo(colorCurrent, new BufferedImage(colorCurrent.width, colorCurrent.height, canvas.getType), true)
+          }
+        }
+        draw(canvas, currentFrame, size)
+      }
+      if (i < numFrames - 1) { // TODO: make this go in correct order, from furthest to closest
+        val forwardOne = ImageIO.read(new File(dir + "/frame-%07d.png".format(i + 2)))
+        var forwardT = transform(canvas, forwardOne)
+        homographies.zipWithIndex.slice(i + 1, (i + look) min numFrames).foreach { case (h, j) =>
+          if ((j - i) % jump == 0 || j == numFrames - 1) {
+            val otherFrame = ImageIO.read(new File(dir + "/frame-%07d.png".format(j + 1)))
+            val colorCurrent = ConvertBufferedImage.convertFromMulti(canvas, null, true, classOf[GrayF32])
+            val colorOther = ConvertBufferedImage.convertFromMulti(otherFrame, null, true, classOf[GrayF32])
+
+            model.set(forwardT)
+            distortion.apply(colorOther, colorCurrent)
+            canvas = ConvertBufferedImage.convertTo(colorCurrent, new BufferedImage(colorCurrent.width, colorCurrent.height, canvas.getType), true)
+          }
+          forwardT = forwardT.concat(h, null)
+        }
+        draw(canvas, currentFrame, size)
+      }
+
+      val x = (canvas.getWidth - size.width) / 2
+      val y = (canvas.getHeight - size.height) / 2
+      canvas = canvas.getSubimage(x, y, size.width, size.height)
+      ImageIO.write(canvas, "png", new File(dir + "/stitched-%07d.png".format(i + 1)))
+    }
+    println("done stitching frames")
+
+    // use ffmpeg to generate a video
+    ffmpeg(dir + "/stitched-%07d.png", output)
+    println("done generating stitched video")
+
+//    val original = ImageIO.read(new File("stitch-assets/video-frames/frame-0000053.png"))
+//    val onePlus = ImageIO.read(new File("stitch-assets/video-frames/frame-0000054.png"))
+//    val outer = ImageIO.read(new File("stitch-assets/video-frames/frame-0000088.png"))
+//    var working = new BufferedImage(size.width * 2, size.height * 2, original.getType)
+//    draw(working, original, size)
+//    var oneHomo = transform(working, onePlus)
+//
+////    homographies.slice(54, 89).map(oneHomo.concat(_, null)) // is there a way to do this with reassignment to oneHomo?
+//    homographies.slice(54, 89).foreach { case (h) =>
+//      oneHomo = oneHomo.concat(h, null)
+//    }
+//
+//    val colorMain = ConvertBufferedImage.convertFromMulti(working, null, true, classOf[GrayF32])
+//    val colorPlus = ConvertBufferedImage.convertFromMulti(onePlus, null, true, classOf[GrayF32])
+//    val colorOuter = ConvertBufferedImage.convertFromMulti(outer, null, true, classOf[GrayF32])
+//
+//    // Setup the rendering toolchain.
+//    val model = new PixelTransformHomography_F32
+//    val interpolater = FactoryInterpolation.bilinearPixelS(classOf[GrayF32], BorderType.ZERO)
+//    val distortion = DistortSupport.createDistortPL(classOf[GrayF32], model, interpolater, false)
+//    distortion.setRenderAll(false)
+//
+//    model.set(oneHomo)
+//    distortion.apply(colorOuter, colorMain)
+//    working = ConvertBufferedImage.convertTo(colorMain, new BufferedImage(colorMain.width, colorMain.height, working.getType), true)
+//    ImageIO.write(working, "png", new File("output.png"))
 
 //    // Load all the extracted frames. TODO: what if the video is too large for memory?
-//    val frames = new File(dir)
+//    val frames = new File(dir)=
 //      .listFiles(f => f.getName.matches("frame-[0-9]+.png"))
 //      .sortWith(_.getName < _.getName)
 //      .map(ImageIO.read)
@@ -84,54 +176,6 @@ object Stitcher {
 //    // Generate a video from the stitched images.
 //    ffmpeg(dir + "/stitched-%07d.png", output)
 //    new File(dir).delete() // comment out to inspect stitched frames
-  }
-
-  def play(): Unit = {
-    // Input parameters.
-    val size   = new Dimension(1920, 1080)
-    val video  = "stitch-assets/balcony.mp4"
-    //    val dir    = "/Users/ashwin/Downloads/stitcher" // Ashwin's computer
-    val dir = "stitch-assets/video-frames" // Eric's setup
-    val output = "stitch-assets/balcony-stitched.mp4"
-    val look   = 22
-    val jump   = 20
-
-    val originalIndex = 220
-    val stitchIndex = 200
-
-    // This does not maintain (our) ordering of the frames we generated (BAD)
-    val frames = new File(dir)
-      .listFiles(f => f.getName.matches("frame-[0-9]+.png"))
-      .sortWith(_.getName < _.getName)
-      .map(ImageIO.read)
-      .toSeq
-
-    ImageIO.write(frames(200), "png", new File("stitch.png"))
-    ImageIO.write(frames(220), "png", new File("original.png"))
-
-    val before = frames(stitchIndex) :: Nil
-    var working = new BufferedImage(size.width * 2, size.height * 2, frames(originalIndex).getType)
-    draw(working, frames(originalIndex), size)
-
-    // Setup the rendering toolchain.
-    val model = new PixelTransformHomography_F32
-    val interpolater = FactoryInterpolation.bilinearPixelS(classOf[GrayF32], BorderType.ZERO)
-    val distortion = DistortSupport.createDistortPL(classOf[GrayF32], model, interpolater, false)
-    distortion.setRenderAll(false)
-
-    val backward = transform(working, before)
-
-    val color = ConvertBufferedImage.convertFromMulti(working, null, true, classOf[GrayF32])
-    val frame = ConvertBufferedImage.convertFromMulti(frames(stitchIndex), null, true, classOf[GrayF32])
-
-    model.set(backward(0))
-    distortion.apply(frame, color)
-
-    working = ConvertBufferedImage.convertTo(color, new BufferedImage(color.width, color.height, working.getType), true)
-
-    draw(working, frames(originalIndex), size)
-
-    ImageIO.write(working, "png", new File("output.png"))
   }
 
   /**
@@ -282,18 +326,43 @@ object Stitcher {
     * @param frames Frames from video.
     * @return Sequence of homographies that transform frame t to t-1.
     */
-  def incrementalTransform(
+  def transform(
     frames: Seq[BufferedImage]
   ): Seq[Homography2D_F64] = {
     val descriptor = FactoryDetectDescribe.surfStable(new ConfigFastHessian(1, 2, 200, 1, 9, 4, 4), null, null, classOf[GrayF32])
     val associator = FactoryAssociation.greedy(FactoryAssociation.scoreEuclidean(classOf[BrightFeature], true), 2, true)
     val matcher = FactoryMultiViewRobust.homographyRansac(null, new ConfigRansac(60, 3))
 
+//    // This gets weird errors (trying to parallelize)
+//    frames
+//      .map(ConvertBufferedImage.convertFromSingle(_, null, classOf[GrayF32]))
+//      .sliding(2)
+//      .toSeq // wtf is going on here???
+//      .par
+//      .map(x => homography(descriptor, associator, matcher)(x.head, x.last))
+//      .seq
+
     frames
       .map(ConvertBufferedImage.convertFromSingle(_, null, classOf[GrayF32]))
       .sliding(2)
-      .map(x => homography(descriptor, associator, matcher)(x.last, x.head))
+      .map(x => homography(descriptor, associator, matcher)(x.head, x.last))
       .toSeq
+  }
+
+  /**
+    * Returns a transformation that maps other onto main.
+    * @param main Main image.
+    * @param other Other image.
+    */
+  def transform(
+    main: BufferedImage,
+    other: BufferedImage
+  ): Homography2D_F64 = {
+    val descriptor = FactoryDetectDescribe.surfStable(new ConfigFastHessian(1, 2, 200, 1, 9, 4, 4), null, null, classOf[GrayF32])
+    val associator = FactoryAssociation.greedy(FactoryAssociation.scoreEuclidean(classOf[BrightFeature], true), 2, true)
+    val matcher = FactoryMultiViewRobust.homographyRansac(null, new ConfigRansac(60, 3))
+
+    homography(descriptor, associator, matcher)(ConvertBufferedImage.convertFromSingle(main, null, classOf[GrayF32]), ConvertBufferedImage.convertFromSingle(other, null, classOf[GrayF32]))
   }
 
   /**

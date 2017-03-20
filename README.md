@@ -14,3 +14,4 @@ Fixing vertical video bars.
   - crop if necessary
 - calculate every homography all at once and then concatenate them for applying actual transformations
 - have some sort of cache like system to store relevant frames in memory
+- verify that the "inaccuracy" is actually inaccurate, and not due to a bug I introduced
