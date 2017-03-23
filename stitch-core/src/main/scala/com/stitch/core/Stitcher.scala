@@ -39,9 +39,9 @@ object Stitcher {
     val look   = 300
     val jump   = 25
 
-    // Extract frames from the video using ffmpeg.
-    ffmpeg(video, dir + "/frame-%07d.png")
-    println("done splitting video into individual frames")
+//    // Extract frames from the video using ffmpeg.
+//    ffmpeg(video, dir + "/frame-%07d.png")
+//    println("done splitting video into individual frames")
 
     // calculating all incremental homographies at once
     val frameFiles = new File(dir).listFiles(f => f.getName.matches("frame-[0-9]+.png")).sortWith(_.getName < _.getName)
@@ -121,13 +121,15 @@ object Stitcher {
 
     val currentFrame = ImageIO.read(frameFiles(i))
     var canvas = new BufferedImage(size.width * 2, size.height * 2, currentFrame.getType)
+    var blankCanvas = new BufferedImage(size.width * 2, size.height * 2, currentFrame.getType)
     draw(canvas, currentFrame, size)
+    draw(blankCanvas, currentFrame, size)
 
     if (i > 0) {
       val backOne = ImageIO.read(frameFiles(i - 1))
       var backT = transform(canvas, backOne)
 
-      homographies.zipWithIndex.slice(0 max (i - look), i - 2).reverse.foreach { case (h, j) =>
+      homographies.zipWithIndex.slice(0 max (i - look), i - 1).reverse.foreach { case (h, j) =>
 
         backT = backT.concat(h.invert(null), null)
 
@@ -144,8 +146,8 @@ object Stitcher {
       draw(canvas, currentFrame, size)
     }
     if (i < numFrames - 1) { // TODO: make this go in correct order, from furthest to closest
-    val forwardOne = ImageIO.read(frameFiles(i + 1))
-      var forwardT = transform(canvas, forwardOne)
+      val forwardOne = ImageIO.read(frameFiles(i + 1))
+      var forwardT = transform(blankCanvas, forwardOne)
       homographies.zipWithIndex.slice(i + 1, (i + look) min numFrames).foreach { case (h, j) =>
         if ((j - i) % jump == 0 || j == numFrames - 1) {
           val otherFrame = ImageIO.read(frameFiles(j))
@@ -222,6 +224,19 @@ object Stitcher {
 //      .par
 //      .map(x => homography(descriptor, associator, matcher)(x.head, x.last))
 //      .seq
+
+//    val grayFrames = frames.par.map(ConvertBufferedImage.convertFromSingle(_, null, classOf[GrayF32])).seq
+//
+//    grayFrames.sliding(2).toSeq.par.map(transform(_(0), _(1)))
+//
+//    grayFrames
+//      .zipWithIndex
+//      .par
+//      .foreach { case (f, i) =>
+//        if (i < frames.length - 1) {
+//          homography(descriptor, associator, matcher)(f, grayFrames(i + 1))
+//        }
+//      }
 
     frames
       .map(ConvertBufferedImage.convertFromSingle(_, null, classOf[GrayF32]))
