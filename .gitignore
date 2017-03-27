@@ -13,6 +13,7 @@ dist
 .pants.workdir.file_lock
 
 # output
+stitch-assets/
 video-frames/
 stitched-video-frames/
 demo-stitched-video-frames/

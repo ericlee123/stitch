@@ -18,13 +18,17 @@ import boofcv.struct.image.GrayF32
 import georegression.struct.homography.Homography2D_F64
 import georegression.struct.point.Point2D_F64
 import java.awt.image.BufferedImage
+
 import org.ddogleg.fitting.modelset.ModelMatcher
 import org.ddogleg.struct.FastQueue
+
 import scala.collection.mutable
 import scala.collection.JavaConverters._
 import java.awt.Dimension
 import java.io.File
 import javax.imageio.ImageIO
+
+import scala.concurrent.ExecutionContext
 
 object Stitcher {
 
@@ -32,16 +36,18 @@ object Stitcher {
 
     // Input parameters.
     val size   = new Dimension(1920, 1080)
-    val video  = "stitch-assets/balcony.mp4"
+    val video  = "stitch-assets/stair-walk.mp4"
 //    val dir    = "/Users/ashwin/Downloads/stitcher" // Ashwin
     val dir = "stitch-assets/video-frames" // Eric
-    val output = "stitch-assets/balcony-stitched.mp4"
-    val look   = 300
-    val jump   = 25
+    val output = "stitch-assets/output.mp4"
+    val look   = 600
+    val jump   = 40
 
-//    // Extract frames from the video using ffmpeg.
-//    ffmpeg(video, dir + "/frame-%07d.png")
-//    println("done splitting video into individual frames")
+    val begin = System.nanoTime
+
+    // Extract frames from the video using ffmpeg.
+    ffmpeg(video, dir + "/frame-%07d.png")
+    println("done splitting video into individual frames")
 
     // calculating all incremental homographies at once
     val frameFiles = new File(dir).listFiles(f => f.getName.matches("frame-[0-9]+.png")).sortWith(_.getName < _.getName)
@@ -59,6 +65,8 @@ object Stitcher {
     // use ffmpeg to generate a video
     ffmpeg(dir + "/stitched-%07d.png", output)
     println("done generating stitched video")
+
+    println("total runtime = " + ((System.nanoTime - begin) / 1000000000))
   }
 
   /**
@@ -212,37 +220,32 @@ object Stitcher {
   def transform(
     frames: Seq[BufferedImage]
   ): Seq[Homography2D_F64] = {
+    frames
+      .par
+      .map(ConvertBufferedImage.convertFromSingle(_, null, classOf[GrayF32]))
+      .seq
+      .sliding(2)
+      .toSeq
+      .par
+      .map(x => transform(x.head, x.last))
+      .seq
+  }
+
+  /**
+    * Just another transform method.
+    * @param grayMain you know
+    * @param grayOther you know
+    * @return
+    */
+  def transform(
+    grayMain: GrayF32,
+    grayOther: GrayF32
+  ): Homography2D_F64 = {
     val descriptor = FactoryDetectDescribe.surfStable(new ConfigFastHessian(1, 2, 200, 1, 9, 4, 4), null, null, classOf[GrayF32])
     val associator = FactoryAssociation.greedy(FactoryAssociation.scoreEuclidean(classOf[BrightFeature], true), 2, true)
     val matcher = FactoryMultiViewRobust.homographyRansac(null, new ConfigRansac(60, 3))
 
-//    // This gets weird errors (trying to parallelize)
-//    frames
-//      .map(ConvertBufferedImage.convertFromSingle(_, null, classOf[GrayF32]))
-//      .sliding(2)
-//      .toSeq // wtf is going on here???
-//      .par
-//      .map(x => homography(descriptor, associator, matcher)(x.head, x.last))
-//      .seq
-
-//    val grayFrames = frames.par.map(ConvertBufferedImage.convertFromSingle(_, null, classOf[GrayF32])).seq
-//
-//    grayFrames.sliding(2).toSeq.par.map(transform(_(0), _(1)))
-//
-//    grayFrames
-//      .zipWithIndex
-//      .par
-//      .foreach { case (f, i) =>
-//        if (i < frames.length - 1) {
-//          homography(descriptor, associator, matcher)(f, grayFrames(i + 1))
-//        }
-//      }
-
-    frames
-      .map(ConvertBufferedImage.convertFromSingle(_, null, classOf[GrayF32]))
-      .sliding(2)
-      .map(x => homography(descriptor, associator, matcher)(x.head, x.last))
-      .toSeq
+    homography(descriptor, associator, matcher)(grayMain, grayOther)
   }
 
   /**
